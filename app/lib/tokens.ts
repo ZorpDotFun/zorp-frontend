@@ -70,15 +70,20 @@ export function formatChange(value: number): string {
 
 const GRADUATED_KEY = "zorp-graduated";
 
+/** Confirmed $40k prints. Dex rolling windows forget the high after a dump. */
+const SEEDED_GRADUATED = ["0x779ea883ed87966ed939def0a7238c89dcfbb2e0"];
+
 function loadGraduated() {
-  if (typeof window === "undefined") return new Set<string>();
+  const set = new Set(SEEDED_GRADUATED);
+  if (typeof window === "undefined") return set;
   try {
     const raw = window.localStorage.getItem(GRADUATED_KEY);
     const rows = raw ? (JSON.parse(raw) as string[]) : [];
-    return new Set(rows.map((row) => row.toLowerCase()));
+    for (const row of rows) set.add(row.toLowerCase());
   } catch {
-    return new Set<string>();
+    /* private mode */
   }
+  return set;
 }
 
 const graduatedMem = loadGraduated();

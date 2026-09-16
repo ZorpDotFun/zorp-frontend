@@ -106,13 +106,34 @@ export async function readLiveUsdPrice(token: Address, tokenIsCurrency0: boolean
   }
 }
 
+/** Highest USDC-per-token print on the launch pool. No timestamps. */
+export async function readPeakUsdPrice(
+  token: Address,
+  tokenIsCurrency0: boolean,
+) {
+  try {
+    const logs = await collectSwapLogs(token, { limit: 400, lookback: 80_000n });
+    let peak = 0;
+    for (const log of logs) {
+      const price = usdPerTokenFromSqrt(
+        log.args.sqrtPriceX96 ?? 0n,
+        tokenIsCurrency0,
+      );
+      if (price > peak) peak = price;
+    }
+    return peak > 0 ? peak : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Real swap prints from PoolManager — not reconstructed % windows. */
 export async function fetchSwapPrints(
   token: Address,
   tokenIsCurrency0: boolean,
 ): Promise<ChartPoint[]> {
   try {
-    const logs = await collectSwapLogs(token);
+    const logs = await collectSwapLogs(token, { limit: 80, lookback: 24_000n });
     if (logs.length === 0) return [];
     const stamps = await stampSwapBlocks(logs.map((log) => log.blockNumber));
 
@@ -132,9 +153,13 @@ export async function fetchSwapPrints(
   }
 }
 
-async function collectSwapLogs(token: Address) {
+async function collectSwapLogs(
+  token: Address,
+  opts?: { limit?: number; lookback?: bigint },
+) {
   const latest = await publicClient.getBlockNumber();
-  const lookback = 24_000n;
+  const lookback = opts?.lookback ?? 24_000n;
+  const limit = opts?.limit ?? 80;
   const fromBlock = latest > lookback ? latest - lookback : 0n;
   const chunk = 3_000n;
   const poolId = launchPoolId(token);
@@ -155,7 +180,7 @@ async function collectSwapLogs(token: Address) {
     } catch {
       continue;
     }
-    if (pages.reduce((sum, page) => sum + page.length, 0) >= 80) break;
+    if (pages.reduce((sum, page) => sum + page.length, 0) >= limit) break;
   }
 
   return pages.flat();

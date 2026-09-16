@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseAbiItem, type Address } from "viem";
-import { LAUNCH_FACTORY, TOTAL_SUPPLY } from "./addresses";
+import { GRADUATION_MC_USD, LAUNCH_FACTORY, TOTAL_SUPPLY } from "./addresses";
 import {
   publicClient,
   readLaunch,
@@ -8,9 +8,17 @@ import {
   readLaunches,
   rememberLaunch,
 } from "./factory";
-import { readLiveUsdPrice } from "./pool-price";
+import { readLiveUsdPrice, readPeakUsdPrice } from "./pool-price";
 import { fetchDexscreenerPoints } from "./token-chart-data";
-import { impliedPeakFdv, noteMarketCap, type Token } from "./tokens";
+import {
+  impliedPeakFdv,
+  hasGraduated,
+  noteMarketCap,
+  type Token,
+} from "./tokens";
+
+const PEAK_FDV_CHECK = 12_000;
+const peakChecked = new Set<string>();
 
 const PRICE_POLL_MS = 8_000;
 
@@ -137,11 +145,25 @@ async function withLiveMarket(token: Token): Promise<Token> {
     const fdv =
       Math.max(liveFdv, dexFdv, price > 0 ? price * TOTAL_SUPPLY : 0) ||
       token.fdv;
+    const key = token.address.toLowerCase();
     noteMarketCap(
       token.address,
       fdv,
       impliedPeakFdv(dexFdv || fdv, dex.priceChange),
     );
+    if (
+      !hasGraduated(token.address) &&
+      fdv >= PEAK_FDV_CHECK &&
+      fdv < GRADUATION_MC_USD &&
+      !peakChecked.has(key)
+    ) {
+      peakChecked.add(key);
+      const peakPrice = await readPeakUsdPrice(
+        token.address as `0x${string}`,
+        token.tokenIsCurrency0,
+      );
+      if (peakPrice) noteMarketCap(token.address, fdv, peakPrice * TOTAL_SUPPLY);
+    }
     return { ...token, price, fdv, mcap: fdv };
   } catch {
     return token;
