@@ -1,0 +1,5 @@
+- https://arcexplorer.org/rpc
+- https://rpc.arc-scan.org
+- https://warp-arc-production.up.railway.app/rpc
+- https://thecusp.io/api/arc-rpc
+- https://arc-mainnet.infura.io/v3/b6bf7d3508c941499b10025c0776eaf8
