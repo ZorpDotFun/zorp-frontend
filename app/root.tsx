@@ -13,8 +13,26 @@ import { Footer } from "./components/footer";
 import { Navbar } from "./components/navbar";
 import { PrivyDevOrigin } from "./components/privy-dev-origin";
 import { VercelAnalytics } from "./components/vercel-analytics";
+import {
+  OG_IMAGE_ALT,
+  OG_IMAGE_HEIGHT,
+  OG_IMAGE_WIDTH,
+  ogImageUrl,
+  siteOrigin,
+  socialImageMeta,
+} from "./lib/site-meta";
 import { ThemeProvider, themeBootScript } from "./lib/theme";
 import "./app.css";
+
+const OG_IMAGE = ogImageUrl();
+
+export function loader({ request }: Route.LoaderArgs) {
+  return { origin: siteOrigin(request) };
+}
+
+export function meta({ data }: Route.MetaArgs) {
+  return socialImageMeta(data?.origin);
+}
 
 export const links: Route.LinksFunction = () => [
   {
@@ -41,6 +59,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/assets/logos/logomark-10x.png" />
         <Meta />
+        <meta property="og:image" content={OG_IMAGE} />
+        <meta property="og:image:secure_url" content={OG_IMAGE} />
+        <meta property="og:image:alt" content={OG_IMAGE_ALT} />
+        <meta property="og:image:width" content={OG_IMAGE_WIDTH} />
+        <meta property="og:image:height" content={OG_IMAGE_HEIGHT} />
+        <meta property="og:image:type" content="image/png" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content={OG_IMAGE} />
+        <meta name="twitter:image:alt" content={OG_IMAGE_ALT} />
         <Links />
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
       </head>

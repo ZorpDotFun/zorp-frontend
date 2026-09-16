@@ -15,7 +15,7 @@ import { formatChange } from "../lib/tokens";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Analytics — Zorp" },
+    { title: "Analytics : Zorp" },
     {
       name: "description",
       content: "Live on-chain volume, launches, creator claims, and protocol fees on Zorp.",

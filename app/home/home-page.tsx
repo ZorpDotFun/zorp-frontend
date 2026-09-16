@@ -17,12 +17,12 @@ export function HomePage() {
       <div className="relative space-y-14 pt-8">
         <GraduatedSection
           tokens={graduated}
-          loading={launches.loading}
+          loading={launches.loading && launches.tokens.length === 0}
           error={launches.error}
         />
         <ExploreSection
           tokens={exploring}
-          loading={launches.loading}
+          loading={launches.loading && launches.tokens.length === 0}
           error={launches.error}
         />
       </div>

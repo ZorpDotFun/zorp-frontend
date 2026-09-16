@@ -1,13 +1,21 @@
 import type { Route } from "./+types/home";
 import { HomePage } from "../home/home-page";
+import { socialImageMeta, siteOrigin } from "../lib/site-meta";
+
+const SITE_TITLE = "Zorp : The native Arc Launchpad";
+const SITE_DESCRIPTION =
+  "The native Arc Launchpad. Non-custodial tokens on Arc, live from block one.";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Zorp — Launch on Arc" },
-    {
-      name: "description",
-      content: "Non-custodial token launchpad on Arc. Live from block one.",
-    },
+    { title: SITE_TITLE },
+    { name: "description", content: SITE_DESCRIPTION },
+    { property: "og:title", content: SITE_TITLE },
+    { property: "og:description", content: SITE_DESCRIPTION },
+    { property: "og:type", content: "website" },
+    { name: "twitter:title", content: SITE_TITLE },
+    { name: "twitter:description", content: SITE_DESCRIPTION },
+    ...socialImageMeta(siteOrigin()),
   ];
 }
 

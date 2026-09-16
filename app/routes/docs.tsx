@@ -6,7 +6,7 @@ import { docsBody } from "../lib/docs-pages";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Docs — Zorp" },
+    { title: "Docs : Zorp" },
     {
       name: "description",
       content: "How Zorp launches and trades tokens on Arc.",

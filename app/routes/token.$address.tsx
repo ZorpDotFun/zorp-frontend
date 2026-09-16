@@ -24,7 +24,7 @@ import { shortenAddress, type Token } from "../lib/tokens";
 
 export function meta({ params }: Route.MetaArgs) {
   return [
-    { title: `Token ${params.address.slice(0, 8)} — Zorp` },
+    { title: `Token ${params.address.slice(0, 8)} : Zorp` },
     { name: "description", content: "Live Zorp launch on Arc." },
   ];
 }
@@ -76,7 +76,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
           return;
         }
         setToken(row);
-        document.title = `${row.name} ($${row.ticker}) — Zorp`;
+        document.title = `${row.name} ($${row.ticker}) : Zorp`;
         return load(row).then(() => {
           timer = window.setInterval(() => {
             void load(row);

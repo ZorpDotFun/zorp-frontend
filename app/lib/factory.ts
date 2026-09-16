@@ -576,6 +576,15 @@ async function readOnchainImage(address: Address): Promise<string> {
   }
 }
 
+export async function readLaunchCount(): Promise<number> {
+  const count = await publicClient.readContract({
+    address: LAUNCH_FACTORY,
+    abi: launchFactoryAbi,
+    functionName: "launchCount",
+  });
+  return Number(count);
+}
+
 export async function readLaunches(): Promise<Token[]> {
   const count = await publicClient.readContract({
     address: LAUNCH_FACTORY,

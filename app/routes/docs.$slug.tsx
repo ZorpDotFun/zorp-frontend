@@ -5,7 +5,7 @@ import { DocsArticlePage } from "./docs";
 export function meta({ params }: Route.MetaArgs) {
   const item = docsItem(params.slug ?? "");
   return [
-    { title: item ? `${item.title} — Zorp docs` : "Docs — Zorp" },
+    { title: item ? `${item.title} : Zorp docs` : "Docs : Zorp" },
     {
       name: "description",
       content: item

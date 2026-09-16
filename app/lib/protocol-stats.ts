@@ -7,8 +7,9 @@ import { launchPoolId } from "./pool-price";
 const USDC_DECIMALS = 6;
 const DAY = 86_400;
 const CHART_DAYS = 14;
-const LOG_CHUNK = 20_000n;
-const CLAIM_RECENT = 8_000n;
+const LOG_CHUNK = 4_000n;
+const CLAIM_RECENT = 80_000n;
+const CLAIM_FLOOR = 200_000n;
 const CACHE_KEY = "zorp-protocol-stats";
 
 const swapEvent = parseAbiItem(
@@ -283,8 +284,10 @@ async function pullCreatorClaims(head: bigint) {
       scannedClaimsTo = recent.scannedTo;
       claimsReady = true;
       if (recentFrom > 0n) {
-        const olderFrom = recentFrom > CLAIM_RECENT ? recentFrom - CLAIM_RECENT : 0n;
-        void backfillOlderClaims(olderFrom, recentFrom - 1n);
+        void backfillOlderClaims(
+          recentFrom > CLAIM_FLOOR ? recentFrom - CLAIM_FLOOR : 0n,
+          recentFrom - 1n,
+        );
       }
       return recent.added.length > 0;
     }
@@ -306,10 +309,17 @@ function applyClaimPrints(added: Print[]) {
 
 async function backfillOlderClaims(fromBlock: bigint, until: bigint) {
   if (fromBlock > until) return;
-  const older = await collectCreatorClaims(fromBlock, until);
-  if (!older.ok || older.added.length === 0) return;
-  applyClaimPrints(older.added);
-  publishLive(false);
+  let end = until;
+  while (end >= fromBlock) {
+    const start = end > LOG_CHUNK ? end - LOG_CHUNK + 1n : fromBlock;
+    const older = await collectCreatorClaims(start < fromBlock ? fromBlock : start, end);
+    if (older.ok) {
+      applyClaimPrints(older.added);
+      if (older.added.length > 0) publishLive(false);
+    }
+    if (start <= fromBlock) break;
+    end = start - 1n;
+  }
 }
 
 async function ingestClaimLogs(
@@ -411,7 +421,7 @@ async function swapLogsForToken(token: Address, fromBlock: bigint, toBlock: bigi
   const logs = [];
   try {
     logs.push(
-      ...(await publicClient.getLogs({
+      ...(await getLogsSplit({
         address: V4_POOL_MANAGER,
         event: swapEvent,
         args: { id: launchPoolId(token) },
@@ -443,7 +453,7 @@ async function collectProtocolFees(fromBlock: bigint, latest: bigint) {
     const pages = await Promise.all(
       blockChunks(fromBlock, latest).map(async (chunk) => {
         try {
-          return await publicClient.getLogs({
+          return await getLogsSplit({
             address: FEE_DISTRIBUTOR,
             event: accruedEvent,
             fromBlock: chunk.start,
@@ -498,23 +508,46 @@ async function collectCreatorClaims(fromBlock: bigint, latest: bigint) {
 }
 
 async function getClaimLogs(fromBlock: bigint, latest: bigint) {
+  const logs = await getLogsSplit({
+    address: FEE_DISTRIBUTOR,
+    event: claimedEvent,
+    fromBlock,
+    toBlock: latest,
+  });
+  return logs;
+}
+
+async function getLogsSplit({
+  address,
+  event,
+  args,
+  fromBlock,
+  toBlock,
+}: {
+  address: Address;
+  event: typeof claimedEvent | typeof accruedEvent | typeof swapEvent;
+  args?: Record<string, unknown>;
+  fromBlock: bigint;
+  toBlock: bigint;
+}) {
+  if (fromBlock > toBlock) return [];
   try {
     return await publicClient.getLogs({
-      address: FEE_DISTRIBUTOR,
-      event: claimedEvent,
+      address,
+      event,
+      ...(args ? { args } : {}),
       fromBlock,
-      toBlock: latest,
+      toBlock,
     });
   } catch {
-    const span = latest - fromBlock;
-    if (span <= 400n) return null;
+    const span = toBlock - fromBlock;
+    if (span <= 200n) return [];
     const mid = fromBlock + span / 2n;
     const [left, right] = await Promise.all([
-      getClaimLogs(fromBlock, mid),
-      getClaimLogs(mid + 1n, latest),
+      getLogsSplit({ address, event, args, fromBlock, toBlock: mid }),
+      getLogsSplit({ address, event, args, fromBlock: mid + 1n, toBlock }),
     ]);
-    if (!left && !right) return null;
-    return [...(left ?? []), ...(right ?? [])];
+    return [...left, ...right];
   }
 }
 
@@ -655,20 +688,15 @@ function assemble({
   partial: boolean;
 }): ProtocolStats {
   const chain24h = sumSince(swapPrints, now - DAY);
-  const volume24h = Math.max(chain24h, dex24h);
+  const volume24h = chain24h > 0 ? chain24h : dex24h;
   const volumePrev24h = sumBetween(swapPrints, now - 2 * DAY, now - DAY);
   const volumeAll = Math.max(sumSince(swapPrints, 0), volume24h);
   const accruedAll = sumSince(feePrints, 0);
-  const rate = (feeBps || PROTOCOL_SWAP_FEE_BPS) / 10_000;
-  const feesAll = accruedAll > 0
-    ? Math.max(accruedAll, feesHeld)
-    : Math.max(feesHeld, volumeAll * rate);
-  const fees24h = accruedAll > 0
-    ? sumSince(feePrints, now - DAY)
-    : volume24h * rate;
+  const feesAll = accruedAll > 0 ? Math.max(accruedAll, feesHeld) : feesHeld;
+  const fees24h = accruedAll > 0 ? sumSince(feePrints, now - DAY) : 0;
   const feesPrev24h = accruedAll > 0
     ? sumBetween(feePrints, now - 2 * DAY, now - DAY)
-    : volumePrev24h * rate;
+    : 0;
 
   return {
     updatedAt: Date.now(),
@@ -764,7 +792,7 @@ function fillDays(rows: Print[], now: number, days: number): DayBucket[] {
 }
 
 export function changePct(current: number, previous: number) {
-  if (!(previous > 0)) return current > 0 ? 100 : 0;
+  if (!(previous > 0)) return null;
   return ((current - previous) / previous) * 100;
 }
 
