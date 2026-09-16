@@ -45,6 +45,10 @@ export function launchPoolKey(token: Address) {
   };
 }
 
+export function dexscreenerLaunchPairUrl(token: Address | string) {
+  return `https://dexscreener.com/arc/${launchPoolId(token as Address)}`;
+}
+
 export function launchPoolId(token: Address) {
   const { currency0, currency1 } = launchPoolKey(token);
   return keccak256(

@@ -138,6 +138,54 @@ function TradingAndPricing() {
         The hook pulls that USDC from the pool and sends it to{" "}
         <Code>FeeDistributor.accrue</Code>.
       </p>
+      <h2>Official pool only</h2>
+      <p>
+        Anyone can open another Uniswap v4 token/USDC pool. Bots and wallets
+        that pick the thin clone will show huge price impact. The Zorp book
+        is fee <Code>0</Code>, tick spacing <Code>60</Code>, hook{" "}
+        <Code>{LAUNCH_HOOK}</Code>. Dexscreener pair id is that pool id.
+        Ignore any other v4 token/USDC pair (for $ZORP the clone is the 70%
+        fee pool).
+      </p>
+      <h2>Uniswap.org and aggregators</h2>
+      <p>
+        The Labs app indexes the launch pool but will not route through it
+        until Uniswap allowlists the hook. Zorp uses{" "}
+        <Code>beforeSwapReturnDelta</Code> / <Code>afterSwapReturnDelta</Code>{" "}
+        to take tax in USDC, so it is not auto-allowlisted. Submit{" "}
+        <a
+          href="https://developers.uniswap.org/hook-allowlist"
+          target="_blank"
+          rel="noreferrer"
+        >
+          developers.uniswap.org/hook-allowlist
+        </a>
+        .
+      </p>
+      <ul>
+        <li>Hook: <Code>{LAUNCH_HOOK}</Code></li>
+        <li>
+          Example pool id ($ZORP):{" "}
+          <Code>0xbc14ccadfb71da5e4006eaff7e9d2491dbcdb997c81c2e5d97da9744beb4db31</Code>
+        </li>
+        <li>Chain: Arc (5042)</li>
+        <li>Tick “hook uses a delta flag”</li>
+        <li>
+          Source:{" "}
+          <a
+            href="https://github.com/ZorpDotFun/zorp-contracts"
+            target="_blank"
+            rel="noreferrer"
+          >
+            github.com/ZorpDotFun/zorp-contracts
+          </a>
+        </li>
+      </ul>
+      <p>
+        Until that lands, swap on zorpdotfun.com. A vanilla second pool would
+        bypass Zorp fees and split liquidity — do not seed one to “fix”
+        Uniswap.
+      </p>
     </>
   );
 }
@@ -387,7 +435,9 @@ function ReadingTokenState() {
           creator / tribute USDC.
         </li>
         <li>
-          <Code>StateView.getSlot0(poolId)</Code> — live sqrt price.
+          <Code>StateView.getSlot0(poolId)</Code> — live sqrt price.{" "}
+          <Code>poolId</Code> is keccak of the launch PoolKey (fee 0, spacing
+          60, hook {LAUNCH_HOOK.slice(0, 8)}…).
         </li>
       </ul>
       <h2>Telegram and Dexscreener</h2>

@@ -12,10 +12,15 @@ import { TokenMarket } from "../components/token-market";
 import { GRADUATION_MC_USD, TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
 import { peekLaunch, readLaunch, readLaunchFees } from "../lib/factory";
 import { feeDestinationLine, feeModelLabel, type FeeConfig } from "../lib/fee-models";
-import { fetchSwapPrints, launchEverGraduated, readLiveUsdPrice } from "../lib/pool-price";
+import {
+  dexscreenerLaunchPairUrl,
+  fetchSwapPrints,
+  launchEverGraduated,
+  launchPoolId,
+  readLiveUsdPrice,
+} from "../lib/pool-price";
 import { MARKET_REFRESH } from "../lib/token-market";
 import {
-  dexscreenerTokenUrl,
   fetchDexscreenerPoints,
   openingPriceUsd,
   type ChartPoint,
@@ -59,7 +64,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
       const address = row.address as Address;
       const [live, dex, prints] = await Promise.all([
         readLiveUsdPrice(address, row.tokenIsCurrency0),
-        fetchDexscreenerPoints(address),
+        fetchDexscreenerPoints(address, launchPoolId(address)),
         fetchSwapPrints(address, row.tokenIsCurrency0),
       ]);
       if (cancelled) return;
@@ -155,7 +160,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
     );
   }
 
-  const dexUrl = dexscreenerTokenUrl(token.address);
+  const dexUrl = dexscreenerLaunchPairUrl(token.address);
   const hasSocials = Boolean(token.twitter || token.telegram || token.website);
 
   return (
@@ -228,6 +233,9 @@ function TokenDetails({
             </span>
             <CopyCaButton address={token.address} />
           </div>
+          <p className="mt-1.5 truncate font-mono text-[11px] text-muted">
+            Official pool {shortenAddress(launchPoolId(token.address as Address))}
+          </p>
         </div>
       </div>
       <TokenFeeChip token={token.address} />

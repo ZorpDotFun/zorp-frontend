@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router";
-import { dexscreenerTokenUrl } from "../lib/token-chart-data";
+import { dexscreenerLaunchPairUrl } from "../lib/pool-price";
 import { shortenAddress } from "../lib/tokens";
 
 export function LaunchSuccessModal({
@@ -15,7 +15,7 @@ export function LaunchSuccessModal({
 }) {
   const [ready, setReady] = useState(false);
   const symbol = ticker.trim().toUpperCase() || "TOKEN";
-  const dexUrl = dexscreenerTokenUrl(token);
+  const dexUrl = dexscreenerLaunchPairUrl(token);
 
   useEffect(() => {
     setReady(true);

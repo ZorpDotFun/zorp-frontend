@@ -6,11 +6,20 @@ import { launchPoolId } from "./pool-price";
 
 const USDC_DECIMALS = 6;
 const DAY = 86_400;
-const CHART_DAYS = 14;
+const HOUR = 3_600;
+const HALF_HOUR = 1_800;
 const LOG_CHUNK = 4_000n;
 const CLAIM_RECENT = 80_000n;
 const CLAIM_FLOOR = 200_000n;
-const CACHE_KEY = "zorp-protocol-stats";
+const CACHE_KEY = "zorp-protocol-stats-v2";
+const SWAP_PRINTS_KEY = "zorp-swap-prints-v1";
+/** Arc mainstage window on 16 Sep 2026 — factory cannot be earlier than this UTC day. */
+const FACTORY_DAY = Math.floor(Date.UTC(2026, 8, 16) / 1000);
+/** Factory 0x0471…baAe created at Arc block 21148315. */
+export const FACTORY_BLOCK = 21_148_315n;
+export const FACTORY_LIVE_FALLBACK = 1_789_557_183;
+export const VOLUME_INTERVALS = { "30m": HALF_HOUR, "1h": HOUR } as const;
+export type VolumeInterval = (typeof VOLUME_INTERVALS)[keyof typeof VOLUME_INTERVALS];
 
 const swapEvent = parseAbiItem(
   "event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)",
@@ -24,7 +33,7 @@ const claimedEvent = parseAbiItem(
   "event Claimed(address indexed account, address indexed asset, uint256 amount)",
 );
 
-export type DayBucket = { time: number; label: string; value: number };
+export type DayBucket = { time: number; label: string; endLabel: string; value: number };
 
 export type ProtocolStats = {
   updatedAt: number;
@@ -43,7 +52,13 @@ export type ProtocolStats = {
   claimedPrev24h: number;
   claimedAll: number;
   volumeDays: DayBucket[];
+  volume30m: DayBucket[];
+  volume1h: DayBucket[];
   launchDays: DayBucket[];
+  launch30m: DayBucket[];
+  launch1h: DayBucket[];
+  factoryLiveAt: number;
+  volumeReady: boolean;
   partial: boolean;
 };
 
@@ -58,11 +73,18 @@ let scannedTo = 0n;
 let scannedClaimsTo = 0n;
 let scannedFeesTo = 0n;
 let liveNow = () => Math.floor(Date.now() / 1000);
+let liveFactoryAt = FACTORY_LIVE_FALLBACK;
 let liveLaunchTimes: number[] = [];
 let liveCreators = new Set<string>();
 let liveFeesHeld = 0;
 let liveFeeBps = PROTOCOL_SWAP_FEE_BPS;
 let liveDex24h = 0;
+let committedVolume = 0;
+let volumeReady = false;
+let snapshotReady = false;
+let swapHistoryReady = false;
+let fetchInFlight: Promise<ProtocolStats> | null = null;
+const livePools = new Map<string, boolean>();
 const claimKeys = new Set<string>();
 const swapKeys = new Set<string>();
 const liveListeners = new Set<(stats: ProtocolStats) => void>();
@@ -74,7 +96,10 @@ export function readCachedProtocolStats(): ProtocolStats | null {
   if (typeof sessionStorage === "undefined") return null;
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as ProtocolStats) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ProtocolStats;
+    if (!parsed.volume30m || !parsed.volume1h) return null;
+    return parsed;
   } catch {
     return null;
   }
@@ -83,8 +108,19 @@ export function readCachedProtocolStats(): ProtocolStats | null {
 export async function fetchProtocolStats(
   onUpdate?: (stats: ProtocolStats) => void,
 ): Promise<ProtocolStats> {
-  const now = Math.floor(Date.now() / 1000);
+  if (fetchInFlight) return fetchInFlight;
+  fetchInFlight = runFetchProtocolStats(onUpdate).finally(() => {
+    fetchInFlight = null;
+  });
+  return fetchInFlight;
+}
+
+async function runFetchProtocolStats(
+  onUpdate?: (stats: ProtocolStats) => void,
+): Promise<ProtocolStats> {
   seedClaimsFromCache();
+  seedVolumeFromCache();
+  seedSwapPrints();
   const headPromise = publicClient.getBlockNumber();
   const claimsStart = headPromise.then((head) => pullCreatorClaims(head));
   const feesStart = headPromise.then((head) => {
@@ -107,6 +143,8 @@ export async function fetchProtocolStats(
   const tokens = rows.map((row) => row.address);
 
   liveLaunchTimes = launchTimes;
+  liveFactoryAt = resolveFactoryLive(launchTimes);
+  rememberLaunchPools(tokens);
   liveCreators = creators;
   liveFeesHeld = feesHeld;
   liveFeeBps = feeBps;
@@ -121,7 +159,7 @@ export async function fetchProtocolStats(
       creators: liveCreators,
       feesHeld: liveFeesHeld,
       feeBps: liveFeeBps,
-      partial,
+      partial: partial && !snapshotReady,
     });
     cacheStats(next);
     onUpdate?.(next);
@@ -137,32 +175,41 @@ export async function fetchProtocolStats(
     publish(true);
   });
 
-  const lookback = await lookbackBlocks(head, 2 * DAY);
-  const floor = head > lookback ? head - lookback : 0n;
-  const fromBlock = scannedTo > floor ? scannedTo + 1n : floor;
-
-  const dexPromise = collectDexVolume(tokens).then((prints) => {
-    liveDex24h = sumSince(prints, now - DAY);
-    publish(true);
-  });
+  const fromBlock =
+    swapHistoryReady && scannedTo >= FACTORY_BLOCK
+      ? scannedTo + 1n
+      : FACTORY_BLOCK;
 
   const swapPromise = collectSwapVolume(tokens, fromBlock, head, (prints) => {
     swapPrintsMem = prints;
+    persistSwapPrints();
     publish(true);
-  }).then((prints) => {
-    swapPrintsMem = prints;
-    publish(true);
+  }).then(async (result) => {
+    let next = result;
+    if (next.prints.length === 0 || (!swapHistoryReady && sumSince(next.prints, 0) < committedVolume * 0.2)) {
+      next = await collectSwapVolumeByToken(tokens, fromBlock, head, (prints) => {
+        swapPrintsMem = prints;
+        persistSwapPrints();
+        publish(true);
+      });
+    }
+    swapPrintsMem = next.prints;
+    persistSwapPrints();
+    if (next.ok) {
+      scannedTo = head;
+      swapHistoryReady = true;
+      commitVolume(sumSince(next.prints, 0));
+    }
   });
 
   const [, feePrints] = await Promise.all([
     claimsStart,
     feesStart,
-    dexPromise,
     swapPromise,
   ]);
 
-  scannedTo = head;
   feePrintsMem = feePrints;
+  snapshotReady = true;
   return publish(false);
 }
 
@@ -171,8 +218,10 @@ export function subscribeProtocolStats(
 ) {
   liveListeners.add(onUpdate);
   seedClaimsFromCache();
+  seedSwapPrints();
   const cached = readCachedProtocolStats();
   if (cached) onUpdate(cached);
+  seedVolumeFromCache();
   if (!liveStarted) {
     liveStarted = true;
     startLiveStats();
@@ -217,6 +266,17 @@ function startLiveStats() {
     },
   });
   publicClient.watchEvent({
+    address: V4_POOL_MANAGER,
+    event: swapEvent,
+    pollingInterval: 2_000,
+    onLogs: (logs) => {
+      if (logs.length === 0) return;
+      void ingestSwapLogs(logs).then((changed) => {
+        if (changed) publishLive(false);
+      });
+    },
+  });
+  publicClient.watchEvent({
     address: FEE_DISTRIBUTOR,
     event: accruedEvent,
     pollingInterval: 2_000,
@@ -255,6 +315,8 @@ async function refreshLiveClaims() {
     ]);
     liveFeesHeld = feesHeld;
     liveLaunchTimes = rows.map((row) => row.launchedAt);
+    liveFactoryAt = resolveFactoryLive(liveLaunchTimes);
+    rememberLaunchPools(rows.map((row) => row.address));
     liveCreators = new Set(
       rows.map((row) => row.creator.toLowerCase()).filter(Boolean),
     );
@@ -274,6 +336,53 @@ function seedClaimsFromCache() {
     value: cached.claimedAll,
     account: "cache",
   });
+}
+
+function seedVolumeFromCache() {
+  const cached = memoryCache ?? readCachedProtocolStats();
+  if (!cached || !(cached.volumeAll > 0)) return;
+  committedVolume = Math.max(committedVolume, cached.volumeAll);
+  volumeReady = true;
+}
+
+function commitVolume(scanned: number) {
+  if (scanned > committedVolume) committedVolume = scanned;
+  volumeReady = true;
+}
+
+function rememberLaunchPools(tokens: Address[]) {
+  for (const token of tokens) {
+    livePools.set(launchPoolId(token).toLowerCase(), token.toLowerCase() < USDC.toLowerCase());
+  }
+}
+
+function seedSwapPrints() {
+  if (swapPrintsMem.length > 0 || typeof sessionStorage === "undefined") return;
+  try {
+    const raw = sessionStorage.getItem(SWAP_PRINTS_KEY);
+    if (!raw) return;
+    const rows = JSON.parse(raw) as Print[];
+    for (const row of rows) {
+      if (!row.time || !(row.value > 0)) continue;
+      if (row.key) {
+        if (swapKeys.has(row.key)) continue;
+        swapKeys.add(row.key);
+      }
+      swapPrintsMem.push(row);
+    }
+    if (swapPrintsMem.length > 0) swapHistoryReady = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistSwapPrints() {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(SWAP_PRINTS_KEY, JSON.stringify(swapPrintsMem));
+  } catch {
+    /* quota */
+  }
 }
 
 async function pullCreatorClaims(head: bigint) {
@@ -350,6 +459,41 @@ async function ingestClaimLogs(
   return added;
 }
 
+async function ingestSwapLogs(
+  logs: {
+    blockNumber?: bigint | null;
+    transactionHash?: string | null;
+    logIndex?: number | null;
+    args: { id?: `0x${string}`; amount0?: bigint; amount1?: bigint };
+  }[],
+) {
+  let added = 0;
+  const stamps = await stampBlocks(
+    logs.map((log) => log.blockNumber).filter((block): block is bigint => block != null),
+  );
+  for (const log of logs) {
+    const poolId = (log.args.id ?? "").toLowerCase();
+    const tokenIs0 = livePools.get(poolId);
+    if (tokenIs0 === undefined) continue;
+    const key = `${log.transactionHash ?? ""}:${log.logIndex ?? ""}`;
+    if (key !== ":" && swapKeys.has(key)) continue;
+    const usdc = tokenIs0 ? log.args.amount1 : log.args.amount0;
+    if (usdc === undefined) continue;
+    const value = Number(formatUnits(usdc < 0n ? -usdc : usdc, USDC_DECIMALS));
+    if (!(value > 0)) continue;
+    if (key !== ":") swapKeys.add(key);
+    const time = (log.blockNumber && stamps.get(log.blockNumber)) || liveNow();
+    swapPrintsMem.push({ time, value, key });
+    if (log.blockNumber && log.blockNumber > scannedTo) scannedTo = log.blockNumber;
+    added += value;
+  }
+  if (added > 0) {
+    commitVolume(sumSince(swapPrintsMem, 0));
+    persistSwapPrints();
+  }
+  return added > 0;
+}
+
 async function readLaunchIndex(): Promise<LaunchRow[]> {
   const count = await publicClient.readContract({
     address: LAUNCH_FACTORY,
@@ -398,58 +542,115 @@ async function collectSwapVolume(
   fromBlock: bigint,
   latest: bigint,
   onChunk?: (prints: Print[]) => void,
-) {
-  if (tokens.length === 0 || fromBlock > latest) return swapPrintsMem;
+): Promise<{ prints: Print[]; ok: boolean }> {
+  if (tokens.length === 0) return { prints: swapPrintsMem, ok: true };
+  if (fromBlock > latest) return { prints: swapPrintsMem, ok: true };
 
-  const chunks = blockChunks(fromBlock, latest).reverse();
+  const pools = new Map(
+    tokens.map((token) => [
+      launchPoolId(token).toLowerCase(),
+      token.toLowerCase() < USDC.toLowerCase(),
+    ]),
+  );
+  const ids = tokens.map((token) => launchPoolId(token));
   const pages: Print[] = [...swapPrintsMem];
+  let ok = true;
 
-  for (const chunk of chunks) {
-    const part = (
-      await Promise.all(
-        tokens.map((token) => swapLogsForToken(token, chunk.start, chunk.end)),
-      )
-    ).flat();
-    pages.push(...part);
-    onChunk?.(pages);
+  for (const chunk of blockChunks(fromBlock, latest)) {
+    try {
+      const logs = await getLogsSplit({
+        address: V4_POOL_MANAGER,
+        event: swapEvent,
+        args: { id: ids },
+        fromBlock: chunk.start,
+        toBlock: chunk.end,
+      });
+      if (logs.length > 0) {
+        const stamps = await stampSwapBlocks(logs.map((log) => log.blockNumber), latest);
+        for (const log of logs) {
+          const tokenIs0 = pools.get((log.args.id ?? "").toLowerCase());
+          if (tokenIs0 === undefined) continue;
+          const key = `${log.transactionHash}:${log.logIndex}`;
+          if (swapKeys.has(key)) continue;
+          const usdc = tokenIs0 ? log.args.amount1 : log.args.amount0;
+          if (usdc === undefined) continue;
+          const value = Number(formatUnits(usdc < 0n ? -usdc : usdc, USDC_DECIMALS));
+          if (!(value > 0)) continue;
+          const time =
+            stamps.get(log.blockNumber) ||
+            timeAtFactoryBlock(log.blockNumber, latest, liveNow());
+          swapKeys.add(key);
+          pages.push({ time, value, key });
+        }
+        onChunk?.(pages);
+      }
+    } catch {
+      ok = false;
+    }
   }
 
-  return pages;
+  return { prints: pages, ok };
 }
 
-async function swapLogsForToken(token: Address, fromBlock: bigint, toBlock: bigint) {
-  const tokenIs0 = token.toLowerCase() < USDC.toLowerCase();
-  const logs = [];
-  try {
-    logs.push(
-      ...(await getLogsSplit({
+async function collectSwapVolumeByToken(
+  tokens: Address[],
+  fromBlock: bigint,
+  latest: bigint,
+  onChunk?: (prints: Print[]) => void,
+): Promise<{ prints: Print[]; ok: boolean }> {
+  const pages: Print[] = [...swapPrintsMem];
+  let ok = true;
+  for (const token of tokens) {
+    try {
+      const logs = await getLogsSplit({
         address: V4_POOL_MANAGER,
         event: swapEvent,
         args: { id: launchPoolId(token) },
         fromBlock,
-        toBlock,
-      })),
-    );
-  } catch {
-    return [] as Print[];
-  }
-  if (logs.length === 0) return [];
-  const stamps = await stampBlocks(logs.map((log) => log.blockNumber));
-  const prints: Print[] = [];
-  for (const log of logs) {
-    const key = `${log.transactionHash}:${log.logIndex}`;
-    if (swapKeys.has(key)) continue;
-    const time = stamps.get(log.blockNumber);
-    if (!time) continue;
-    const usdc = tokenIs0 ? log.args.amount1 : log.args.amount0;
-    if (usdc === undefined) continue;
-    const value = Number(formatUnits(usdc < 0n ? -usdc : usdc, USDC_DECIMALS));
-    if (value > 0) {
-      swapKeys.add(key);
-      prints.push({ time, value, key });
+        toBlock: latest,
+      });
+      if (logs.length === 0) continue;
+      const tokenIs0 = token.toLowerCase() < USDC.toLowerCase();
+      const stamps = await stampSwapBlocks(logs.map((log) => log.blockNumber), latest);
+      for (const log of logs) {
+        const key = `${log.transactionHash}:${log.logIndex}`;
+        if (swapKeys.has(key)) continue;
+        const usdc = tokenIs0 ? log.args.amount1 : log.args.amount0;
+        if (usdc === undefined) continue;
+        const value = Number(formatUnits(usdc < 0n ? -usdc : usdc, USDC_DECIMALS));
+        if (!(value > 0)) continue;
+        swapKeys.add(key);
+        pages.push({
+          time: stamps.get(log.blockNumber) || timeAtFactoryBlock(log.blockNumber, latest, liveNow()),
+          value,
+          key,
+        });
+      }
+      onChunk?.(pages);
+    } catch {
+      ok = false;
     }
   }
-  return prints;
+  return { prints: pages, ok };
+}
+
+function timeAtFactoryBlock(block: bigint, head: bigint, headTs: number) {
+  if (block <= FACTORY_BLOCK) return FACTORY_LIVE_FALLBACK;
+  const span = head > FACTORY_BLOCK ? head - FACTORY_BLOCK : 1n;
+  const dt = Math.max(headTs - FACTORY_LIVE_FALLBACK, 1);
+  return FACTORY_LIVE_FALLBACK + (Number(block - FACTORY_BLOCK) * dt) / Number(span);
+}
+
+async function stampSwapBlocks(blocks: bigint[], head: bigint) {
+  const stamps = await stampBlocks(blocks);
+  const now = liveNow();
+  for (const block of blocks) {
+    const time = stamps.get(block);
+    if (!time || time < FACTORY_DAY) {
+      stamps.set(block, timeAtFactoryBlock(block, head, now));
+    }
+  }
+  return stamps;
 }
 
 async function collectProtocolFees(fromBlock: bigint, latest: bigint) {
@@ -557,33 +758,6 @@ async function getLogsSplit({
   }
 }
 
-async function collectDexVolume(tokens: Address[]) {
-  if (tokens.length === 0) return [] as Print[];
-  const now = Math.floor(Date.now() / 1000);
-  try {
-    const response = await fetch(
-      `https://api.dexscreener.com/latest/dex/tokens/${tokens.join(",")}`,
-    );
-    if (!response.ok) return [];
-    const body = (await response.json()) as {
-      pairs?: { chainId?: string; baseToken?: { address?: string }; volume?: { h24?: number } }[];
-    };
-    const seen = new Set<string>();
-    const prints: Print[] = [];
-    for (const pair of body.pairs ?? []) {
-      const address = (pair.baseToken?.address ?? "").toLowerCase();
-      if (!address || seen.has(address)) continue;
-      if (pair.chainId && pair.chainId !== "arc") continue;
-      seen.add(address);
-      const value = Number(pair.volume?.h24 ?? 0);
-      if (Number.isFinite(value) && value > 0) prints.push({ time: now, value });
-    }
-    return prints;
-  } catch {
-    return [];
-  }
-}
-
 async function readTreasuryUsdc() {
   try {
     const raw = await publicClient.readContract({
@@ -624,7 +798,7 @@ async function lookbackBlocks(latest: bigint, seconds: number) {
 
 function clampLookback(blocks: bigint) {
   if (blocks < 8_000n) return 8_000n;
-  if (blocks > 120_000n) return 120_000n;
+  if (blocks > 250_000n) return 250_000n;
   return blocks;
 }
 
@@ -695,13 +869,23 @@ function assemble({
 }): ProtocolStats {
   const volume24h = sumSince(swapPrints, now - DAY);
   const volumePrev24h = sumBetween(swapPrints, now - 2 * DAY, now - DAY);
-  const volumeAll = sumSince(swapPrints, 0);
+  const scannedVolume = sumSince(swapPrints, 0);
+  const volumeAll = Math.max(
+    committedVolume,
+    swapHistoryReady ? scannedVolume : committedVolume,
+  );
   const accruedAll = sumSince(feePrints, 0);
   const feesAll = accruedAll > 0 ? Math.max(accruedAll, feesHeld) : feesHeld;
   const fees24h = accruedAll > 0 ? sumSince(feePrints, now - DAY) : 0;
   const feesPrev24h = accruedAll > 0
     ? sumBetween(feePrints, now - 2 * DAY, now - DAY)
     : 0;
+  const from = resolveFactoryLive(launchTimes);
+  const launchPrints = launchTimes.map((time) => ({ time, value: 1 }));
+  const volume30m = fillInterval(swapPrints, from, now, HALF_HOUR);
+  const volume1h = fillInterval(swapPrints, from, now, HOUR);
+  const launch30m = fillInterval(launchPrints, from, now, HALF_HOUR);
+  const launch1h = fillInterval(launchPrints, from, now, HOUR);
 
   return {
     updatedAt: Date.now(),
@@ -719,25 +903,57 @@ function assemble({
     claimed24h: sumSince(claimPrints, now - DAY),
     claimedPrev24h: sumBetween(claimPrints, now - 2 * DAY, now - DAY),
     claimedAll: sumSince(claimPrints, 0),
-    volumeDays: fillDays(
-      swapPrints.length > 0 ? swapPrints : volume24h > 0 ? [{ time: now, value: volume24h }] : [],
-      now,
-      CHART_DAYS,
-    ),
-    launchDays: fillDays(
-      launchTimes.map((time) => ({ time, value: 1 })),
-      now,
-      CHART_DAYS,
-    ),
-    partial,
+    volumeDays: volume1h,
+    volume30m,
+    volume1h,
+    launchDays: launch1h,
+    launch30m,
+    launch1h,
+    factoryLiveAt: from,
+    volumeReady,
+    partial: partial && !snapshotReady,
   };
+}
+
+function resolveFactoryLive(launchTimes: number[]) {
+  let start = liveFactoryAt >= FACTORY_DAY ? liveFactoryAt : FACTORY_LIVE_FALLBACK;
+  for (const time of launchTimes) {
+    if (time >= FACTORY_DAY && time < start) start = time;
+  }
+  return start;
 }
 
 function cacheStats(stats: ProtocolStats) {
   const prev = memoryCache;
   let next = stats;
-  if (prev && stats.volumeAll < prev.volumeAll) {
+  if (next.volumeAll > committedVolume) committedVolume = next.volumeAll;
+  if (prev && next.volumeAll < prev.volumeAll) {
     next = { ...next, volumeAll: prev.volumeAll };
+  }
+  if (next.volumeAll > 0) next = { ...next, volumeReady: true };
+  if (
+    prev &&
+    prev.volume30m?.some((bar) => bar.value > 0) &&
+    !stats.volume30m.some((bar) => bar.value > 0)
+  ) {
+    next = {
+      ...next,
+      volume30m: prev.volume30m,
+      volume1h: prev.volume1h,
+      volumeDays: prev.volumeDays,
+    };
+  }
+  if (
+    prev &&
+    prev.launch30m?.some((bar) => bar.value > 0) &&
+    !stats.launch30m?.some((bar) => bar.value > 0)
+  ) {
+    next = {
+      ...next,
+      launch30m: prev.launch30m,
+      launch1h: prev.launch1h,
+      launchDays: prev.launchDays,
+    };
   }
   if (prev && stats.claimedAll < prev.claimedAll && !claimsReady) {
     next = {
@@ -774,29 +990,52 @@ function countBetween(times: number[], from: number, to: number) {
   return times.filter((time) => time >= from && time < to).length;
 }
 
-function utcDayStart(ts: number) {
-  const date = new Date(ts * 1000);
-  return Math.floor(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 1000,
-  );
+function alignDown(ts: number, interval: number) {
+  return Math.floor(ts / interval) * interval;
 }
 
-function fillDays(rows: Print[], now: number, days: number): DayBucket[] {
-  const last = utcDayStart(now);
+function fillInterval(
+  rows: Print[],
+  from: number,
+  now: number,
+  interval: VolumeInterval,
+): DayBucket[] {
+  const floor = from >= FACTORY_DAY ? from : FACTORY_LIVE_FALLBACK;
+  let start = alignDown(floor, interval);
+  const end = alignDown(Math.max(now, start), interval);
+  const maxSpan = 21 * DAY;
+  if (end - start > maxSpan) start = alignDown(end - maxSpan, interval);
   const buckets = new Map<number, number>();
   for (const row of rows) {
-    const day = utcDayStart(row.time);
-    buckets.set(day, (buckets.get(day) ?? 0) + row.value);
+    if (row.time < start) continue;
+    const time = alignDown(row.time, interval);
+    buckets.set(time, (buckets.get(time) ?? 0) + row.value);
   }
-  return Array.from({ length: days }, (_, index) => {
-    const time = last - (days - 1 - index) * DAY;
-    const date = new Date(time * 1000);
-    return {
+  const out: DayBucket[] = [];
+  for (let time = start; time <= end; time += interval) {
+    out.push({
       time,
-      label: date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }),
+      label: formatIntervalLabel(time),
+      endLabel: formatIntervalLabel(time + interval),
       value: buckets.get(time) ?? 0,
-    };
+    });
+  }
+  return out;
+}
+
+function formatIntervalLabel(time: number) {
+  return new Date(time * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
   });
+}
+
+export function emptyVolumeBars(interval: VolumeInterval): DayBucket[] {
+  return fillInterval([], FACTORY_LIVE_FALLBACK, Math.floor(Date.now() / 1000), interval);
 }
 
 export function changePct(current: number, previous: number) {
@@ -809,6 +1048,14 @@ export function formatStatUsd(value: number) {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
   return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatVolumeUsd(value: number) {
+  if (!(value > 0)) return "$0.00";
+  return `$${value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export function formatStatCount(value: number) {

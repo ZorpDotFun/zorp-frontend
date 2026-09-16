@@ -9,7 +9,7 @@ import {
   readLaunches,
   rememberLaunch,
 } from "./factory";
-import { launchEverGraduated, readLiveUsdPrice } from "./pool-price";
+import { launchEverGraduated, launchPoolId, readLiveUsdPrice } from "./pool-price";
 import { fetchDexscreenerPoints } from "./token-chart-data";
 import {
   impliedPeakFdv,
@@ -164,7 +164,10 @@ async function withLiveMarket(token: Token): Promise<Token> {
   try {
     const [live, dex] = await Promise.all([
       readLiveUsdPrice(token.address as `0x${string}`, token.tokenIsCurrency0),
-      fetchDexscreenerPoints(token.address),
+      fetchDexscreenerPoints(
+        token.address,
+        launchPoolId(token.address as `0x${string}`),
+      ),
     ]);
     const livePrice = live ?? 0;
     const dexPrice = dex.priceUsd ?? 0;

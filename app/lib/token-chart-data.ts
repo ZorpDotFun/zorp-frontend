@@ -73,7 +73,10 @@ export type DexPriceChange = {
   h24?: number;
 };
 
-export async function fetchDexscreenerPoints(token: string): Promise<{
+export async function fetchDexscreenerPoints(
+  token: string,
+  officialPoolId?: string,
+): Promise<{
   priceUsd: number | null;
   fdv: number | null;
   priceChange: DexPriceChange | null;
@@ -93,6 +96,7 @@ export async function fetchDexscreenerPoints(token: string): Promise<{
     const body = (await response.json()) as {
       pairs?: {
         chainId?: string;
+        pairAddress?: string;
         priceUsd?: string;
         fdv?: number;
         marketCap?: number;
@@ -101,9 +105,14 @@ export async function fetchDexscreenerPoints(token: string): Promise<{
       }[];
     };
     const arcPairs = (body.pairs ?? []).filter((item) => item.chainId === "arc");
-    const pair = [...(arcPairs.length > 0 ? arcPairs : body.pairs ?? [])].sort(
+    const ranked = [...(arcPairs.length > 0 ? arcPairs : body.pairs ?? [])].sort(
       (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
-    )[0];
+    );
+    const official = officialPoolId?.toLowerCase();
+    const pair =
+      (official
+        ? ranked.find((item) => item.pairAddress?.toLowerCase() === official)
+        : undefined) ?? ranked[0];
     if (!pair) return empty;
     const priceUsd = pair.priceUsd ? Number(pair.priceUsd) : null;
     if (!priceUsd || !Number.isFinite(priceUsd)) return empty;

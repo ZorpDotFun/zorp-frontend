@@ -10,7 +10,7 @@ import { Link } from "react-router";
 import { explorerAddress, explorerTx, launchToken } from "../lib/factory";
 import { validateFees, type FeeConfig } from "../lib/fee-models";
 import { openWalletAuth } from "../lib/privy-wallet";
-import { dexscreenerTokenUrl } from "../lib/token-chart-data";
+import { dexscreenerLaunchPairUrl } from "../lib/pool-price";
 import { shortenAddress } from "../lib/tokens";
 import { usePrivyReady } from "./app-privy-provider";
 import { LaunchSuccessModal } from "./launch-success-modal";
@@ -162,7 +162,7 @@ function LaunchSubmitLive({
               View Live Token
             </Link>
             <a
-              href={dexscreenerTokenUrl(result.token)}
+              href={dexscreenerLaunchPairUrl(result.token)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-10 items-center rounded-full bg-surface px-4 text-[13px] font-bold text-ink ring-1 ring-line"
