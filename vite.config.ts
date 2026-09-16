@@ -1,10 +1,20 @@
 import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
-export default defineConfig({
-  plugins: [tailwindcss(), reactRouter()],
-  resolve: {
-    tsconfigPaths: true,
-  },
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const privyAppId = env.VITE_PRIVY_APP_ID || env.PRIVY_APP_ID || "";
+  const privyClientId = env.VITE_PRIVY_CLIENT_ID || env.PRIVY_CLIENT_ID || "";
+
+  return {
+    plugins: [tailwindcss(), reactRouter()],
+    resolve: {
+      tsconfigPaths: true,
+    },
+    define: {
+      "import.meta.env.VITE_PRIVY_APP_ID": JSON.stringify(privyAppId),
+      "import.meta.env.VITE_PRIVY_CLIENT_ID": JSON.stringify(privyClientId),
+    },
+  };
 });

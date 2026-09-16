@@ -1,7 +1,16 @@
 .DS_Store
-.env
-/node_modules/
+*.log
 
-# React Router
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies / build
+/node_modules/
 /.react-router/
 /build/
+/dist/
+
+# Hosting
+.vercel
