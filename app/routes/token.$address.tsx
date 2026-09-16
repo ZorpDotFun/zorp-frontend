@@ -20,7 +20,12 @@ import {
   openingPriceUsd,
   type ChartPoint,
 } from "../lib/token-chart-data";
-import { shortenAddress, type Token } from "../lib/tokens";
+import {
+  impliedPeakFdv,
+  noteMarketCap,
+  shortenAddress,
+  type Token,
+} from "../lib/tokens";
 
 export function meta({ params }: Route.MetaArgs) {
   return [
@@ -59,8 +64,16 @@ export default function TokenPage({ params }: Route.ComponentProps) {
       ]);
       if (cancelled) return;
 
-      const latest = live ?? dex.priceUsd ?? row.price;
-      const nextFdv = latest * TOTAL_SUPPLY;
+      const latest = Math.max(live ?? 0, dex.priceUsd ?? 0, row.price);
+      const nextFdv = Math.max(
+        latest * TOTAL_SUPPLY,
+        dex.fdv && dex.fdv > 0 ? dex.fdv : 0,
+      );
+      noteMarketCap(
+        row.address,
+        nextFdv,
+        impliedPeakFdv(dex.fdv ?? nextFdv, dex.priceChange),
+      );
       const now = Date.now() / 1000;
       const merged = mergePoints([
         { time: row.launchedAt / 1000, value: openingPriceUsd() },
@@ -155,7 +168,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
             ← Explore
           </Link>
           <div className="rounded-3xl bg-raised px-5 py-4 ring-1 ring-line">
-            <GraduationMeter mc={fdv} />
+            <GraduationMeter mc={fdv} address={token.address} />
           </div>
           <TokenChart
             ticker={token.ticker}

@@ -351,7 +351,11 @@ function ExploreCard({ token }: { token: Token }) {
             {formatChange(token.change24h)}
           </span>
         </div>
-        <GraduationMeter mc={tokenMarketCap(token)} className="mt-1.5" />
+        <GraduationMeter
+          mc={tokenMarketCap(token)}
+          address={token.address}
+          className="mt-1.5"
+        />
         <p className="mt-1.5 truncate font-mono text-[10px] text-muted">
           {shortenAddress(token.address)} · {formatAge(token.launchedAt)}
         </p>

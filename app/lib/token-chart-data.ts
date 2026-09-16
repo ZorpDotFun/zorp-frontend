@@ -66,37 +66,57 @@ export function openingPriceUsd() {
   return TOTAL_SUPPLY > 0 ? 3000 / TOTAL_SUPPLY : 0;
 }
 
+export type DexPriceChange = {
+  m5?: number;
+  h1?: number;
+  h6?: number;
+  h24?: number;
+};
+
 export async function fetchDexscreenerPoints(token: string): Promise<{
   priceUsd: number | null;
   fdv: number | null;
+  priceChange: DexPriceChange | null;
   points: ChartPoint[];
 }> {
+  const empty = {
+    priceUsd: null,
+    fdv: null,
+    priceChange: null,
+    points: [] as ChartPoint[],
+  };
   try {
     const response = await fetch(
       `https://api.dexscreener.com/latest/dex/tokens/${token}`,
     );
-    if (!response.ok) return { priceUsd: null, fdv: null, points: [] };
+    if (!response.ok) return empty;
     const body = (await response.json()) as {
       pairs?: {
         chainId?: string;
         priceUsd?: string;
         fdv?: number;
-        priceChange?: { m5?: number; h1?: number; h6?: number; h24?: number };
+        marketCap?: number;
+        priceChange?: DexPriceChange;
       }[];
     };
     const pair =
       body.pairs?.find((item) => item.chainId === "arc") ?? body.pairs?.[0];
     const priceUsd = pair?.priceUsd ? Number(pair.priceUsd) : null;
-    if (!priceUsd || !Number.isFinite(priceUsd)) {
-      return { priceUsd: null, fdv: null, points: [] };
-    }
+    if (!priceUsd || !Number.isFinite(priceUsd)) return empty;
+    const reported =
+      typeof pair?.marketCap === "number" && pair.marketCap > 0
+        ? pair.marketCap
+        : typeof pair?.fdv === "number"
+          ? pair.fdv
+          : priceUsd * TOTAL_SUPPLY;
     return {
       priceUsd,
-      fdv: typeof pair?.fdv === "number" ? pair.fdv : priceUsd * TOTAL_SUPPLY,
+      fdv: reported,
+      priceChange: pair?.priceChange ?? null,
       points: [],
     };
   } catch {
-    return { priceUsd: null, fdv: null, points: [] };
+    return empty;
   }
 }
 

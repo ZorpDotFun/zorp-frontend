@@ -10,7 +10,9 @@ import {
 } from "./factory";
 import { readLiveUsdPrice } from "./pool-price";
 import { fetchDexscreenerPoints } from "./token-chart-data";
-import type { Token } from "./tokens";
+import { impliedPeakFdv, noteMarketCap, type Token } from "./tokens";
+
+const PRICE_POLL_MS = 8_000;
 
 const launchedEvent = parseAbiItem(
   "event TokenLaunched(address indexed token, address indexed creator, address indexed pairAsset, uint256 supply, uint256 openingPrice, uint256 firstBuySpent, uint256 firstBuyTokens)",
@@ -38,6 +40,14 @@ export function useLaunches() {
     } finally {
       if (!silent) setLoading(false);
     }
+  }, []);
+
+  const refreshPrices = useCallback(async () => {
+    const current = tokensRef.current;
+    if (current.length === 0) return;
+    const priced = await Promise.all(current.map(withLiveMarket));
+    for (const row of priced) rememberLaunch(row);
+    setTokens(priced);
   }, []);
 
   const upsert = useCallback(async (address: Address) => {
@@ -90,12 +100,18 @@ export function useLaunches() {
         });
     }, 5_000);
 
+    const pricePoll = window.setInterval(() => {
+      if (cancelled || document.visibilityState === "hidden") return;
+      void refreshPrices();
+    }, PRICE_POLL_MS);
+
     return () => {
       cancelled = true;
       unwatch();
       window.clearInterval(poll);
+      window.clearInterval(pricePoll);
     };
-  }, [refresh, upsert]);
+  }, [refresh, refreshPrices, upsert]);
 
   return { tokens, loading, error, refresh };
 }
@@ -110,8 +126,22 @@ async function withLiveMarket(token: Token): Promise<Token> {
       readLiveUsdPrice(token.address as `0x${string}`, token.tokenIsCurrency0),
       fetchDexscreenerPoints(token.address),
     ]);
-    const price = live ?? dex.priceUsd ?? token.price;
-    const fdv = price > 0 ? price * TOTAL_SUPPLY : dex.fdv && dex.fdv > 0 ? dex.fdv : token.fdv;
+    const livePrice = live ?? 0;
+    const dexPrice = dex.priceUsd ?? 0;
+    const price = [livePrice, dexPrice, token.price].reduce(
+      (best, next) => (next > best ? next : best),
+      0,
+    );
+    const liveFdv = livePrice > 0 ? livePrice * TOTAL_SUPPLY : 0;
+    const dexFdv = dex.fdv && dex.fdv > 0 ? dex.fdv : 0;
+    const fdv =
+      Math.max(liveFdv, dexFdv, price > 0 ? price * TOTAL_SUPPLY : 0) ||
+      token.fdv;
+    noteMarketCap(
+      token.address,
+      fdv,
+      impliedPeakFdv(dexFdv || fdv, dex.priceChange),
+    );
     return { ...token, price, fdv, mcap: fdv };
   } catch {
     return token;

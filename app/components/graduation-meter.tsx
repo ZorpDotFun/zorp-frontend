@@ -3,13 +3,15 @@ import { formatUsd, graduationPct, isGraduated } from "../lib/tokens";
 
 export function GraduationMeter({
   mc,
+  address,
   className = "",
 }: {
   mc: number;
+  address?: string;
   className?: string;
 }) {
   const pct = graduationPct(mc);
-  const done = isGraduated(mc);
+  const done = isGraduated(mc, address);
 
   return (
     <div className={className}>
