@@ -96,12 +96,16 @@ export async function fetchDexscreenerPoints(token: string): Promise<{
         priceUsd?: string;
         fdv?: number;
         marketCap?: number;
+        liquidity?: { usd?: number };
         priceChange?: DexPriceChange;
       }[];
     };
-    const pair =
-      body.pairs?.find((item) => item.chainId === "arc") ?? body.pairs?.[0];
-    const priceUsd = pair?.priceUsd ? Number(pair.priceUsd) : null;
+    const arcPairs = (body.pairs ?? []).filter((item) => item.chainId === "arc");
+    const pair = [...(arcPairs.length > 0 ? arcPairs : body.pairs ?? [])].sort(
+      (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
+    )[0];
+    if (!pair) return empty;
+    const priceUsd = pair.priceUsd ? Number(pair.priceUsd) : null;
     if (!priceUsd || !Number.isFinite(priceUsd)) return empty;
     const reported =
       typeof pair?.marketCap === "number" && pair.marketCap > 0

@@ -21,6 +21,7 @@ export type Token = {
   hue: number;
   recentBuys: number;
   tokenIsCurrency0: boolean;
+  graduated?: boolean;
 };
 
 export function formatUsd(value: number): string {
@@ -70,20 +71,15 @@ export function formatChange(value: number): string {
 
 const GRADUATED_KEY = "zorp-graduated";
 
-/** Confirmed $40k prints. Dex rolling windows forget the high after a dump. */
-const SEEDED_GRADUATED = ["0x779ea883ed87966ed939def0a7238c89dcfbb2e0"];
-
 function loadGraduated() {
-  const set = new Set(SEEDED_GRADUATED);
-  if (typeof window === "undefined") return set;
+  if (typeof window === "undefined") return new Set<string>();
   try {
     const raw = window.localStorage.getItem(GRADUATED_KEY);
     const rows = raw ? (JSON.parse(raw) as string[]) : [];
-    for (const row of rows) set.add(row.toLowerCase());
+    return new Set(rows.map((row) => row.toLowerCase()));
   } catch {
-    /* private mode */
+    return new Set<string>();
   }
-  return set;
 }
 
 const graduatedMem = loadGraduated();
@@ -144,8 +140,9 @@ export function isGraduated(mc: number, address?: string) {
 }
 
 export function tokenHasGraduated(
-  token: Pick<Token, "address" | "fdv" | "mcap">,
+  token: Pick<Token, "address" | "fdv" | "mcap" | "graduated">,
 ) {
+  if (token.graduated) return true;
   return isGraduated(tokenMarketCap(token), token.address);
 }
 

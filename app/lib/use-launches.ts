@@ -8,7 +8,7 @@ import {
   readLaunches,
   rememberLaunch,
 } from "./factory";
-import { readLiveUsdPrice, readPeakUsdPrice } from "./pool-price";
+import { launchEverGraduated, readLiveUsdPrice } from "./pool-price";
 import { fetchDexscreenerPoints } from "./token-chart-data";
 import {
   impliedPeakFdv,
@@ -17,7 +17,6 @@ import {
   type Token,
 } from "./tokens";
 
-const PEAK_FDV_CHECK = 12_000;
 const peakChecked = new Set<string>();
 
 const PRICE_POLL_MS = 8_000;
@@ -151,20 +150,19 @@ async function withLiveMarket(token: Token): Promise<Token> {
       fdv,
       impliedPeakFdv(dexFdv || fdv, dex.priceChange),
     );
-    if (
-      !hasGraduated(token.address) &&
-      fdv >= PEAK_FDV_CHECK &&
-      fdv < GRADUATION_MC_USD &&
-      !peakChecked.has(key)
-    ) {
+    let graduated =
+      fdv >= GRADUATION_MC_USD ||
+      hasGraduated(token.address) ||
+      impliedPeakFdv(dexFdv || fdv, dex.priceChange) >= GRADUATION_MC_USD;
+    if (!graduated && !peakChecked.has(key)) {
       peakChecked.add(key);
-      const peakPrice = await readPeakUsdPrice(
+      graduated = await launchEverGraduated(
         token.address as `0x${string}`,
         token.tokenIsCurrency0,
       );
-      if (peakPrice) noteMarketCap(token.address, fdv, peakPrice * TOTAL_SUPPLY);
+      if (graduated) noteMarketCap(token.address, GRADUATION_MC_USD);
     }
-    return { ...token, price, fdv, mcap: fdv };
+    return { ...token, price, fdv, mcap: fdv, graduated };
   } catch {
     return token;
   }

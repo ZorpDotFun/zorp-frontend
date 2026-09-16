@@ -9,10 +9,10 @@ import { GraduationMeter } from "../components/graduation-meter";
 import { CreatorFees } from "../components/creator-fees";
 import { TokenTrade } from "../components/token-trade";
 import { TokenMarket } from "../components/token-market";
-import { TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
+import { GRADUATION_MC_USD, TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
 import { peekLaunch, readLaunch, readLaunchFees } from "../lib/factory";
 import { feeDestinationLine, feeModelLabel, type FeeConfig } from "../lib/fee-models";
-import { fetchSwapPrints, readLiveUsdPrice } from "../lib/pool-price";
+import { fetchSwapPrints, launchEverGraduated, readLiveUsdPrice } from "../lib/pool-price";
 import { MARKET_REFRESH } from "../lib/token-market";
 import {
   dexscreenerTokenUrl,
@@ -69,11 +69,19 @@ export default function TokenPage({ params }: Route.ComponentProps) {
         latest * TOTAL_SUPPLY,
         dex.fdv && dex.fdv > 0 ? dex.fdv : 0,
       );
-      noteMarketCap(
-        row.address,
-        nextFdv,
-        impliedPeakFdv(dex.fdv ?? nextFdv, dex.priceChange),
-      );
+      const printPeak =
+        prints.reduce((best, point) => Math.max(best, point.value), 0) *
+        TOTAL_SUPPLY;
+      const implied = impliedPeakFdv(dex.fdv ?? nextFdv, dex.priceChange);
+      let graduated =
+        nextFdv >= GRADUATION_MC_USD ||
+        printPeak >= GRADUATION_MC_USD ||
+        implied >= GRADUATION_MC_USD;
+      if (!graduated) {
+        graduated = await launchEverGraduated(address, row.tokenIsCurrency0);
+      }
+      if (graduated) noteMarketCap(row.address, GRADUATION_MC_USD);
+      else noteMarketCap(row.address, nextFdv, implied);
       const now = Date.now() / 1000;
       const merged = mergePoints([
         { time: row.launchedAt / 1000, value: openingPriceUsd() },

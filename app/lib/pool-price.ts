@@ -1,5 +1,12 @@
 import { encodeAbiParameters, keccak256, parseAbiItem, type Address } from "viem";
-import { LAUNCH_HOOK, USDC, V4_POOL_MANAGER, V4_STATE_VIEW } from "./addresses";
+import {
+  GRADUATION_MC_USD,
+  LAUNCH_HOOK,
+  TOTAL_SUPPLY,
+  USDC,
+  V4_POOL_MANAGER,
+  V4_STATE_VIEW,
+} from "./addresses";
 import { publicClient } from "./factory";
 import type { ChartPoint } from "./token-chart-data";
 
@@ -106,24 +113,45 @@ export async function readLiveUsdPrice(token: Address, tokenIsCurrency0: boolean
   }
 }
 
-/** Highest USDC-per-token print on the launch pool. No timestamps. */
-export async function readPeakUsdPrice(
+const GRADUATION_PRICE = GRADUATION_MC_USD / TOTAL_SUPPLY;
+
+/** True if any launch-pool swap printed at or above the $40k FDV tick. */
+export async function launchEverGraduated(
   token: Address,
   tokenIsCurrency0: boolean,
 ) {
   try {
-    const logs = await collectSwapLogs(token, { limit: 400, lookback: 80_000n });
-    let peak = 0;
-    for (const log of logs) {
-      const price = usdPerTokenFromSqrt(
-        log.args.sqrtPriceX96 ?? 0n,
-        tokenIsCurrency0,
-      );
-      if (price > peak) peak = price;
+    const latest = await publicClient.getBlockNumber();
+    const lookback = 80_000n;
+    const fromBlock = latest > lookback ? latest - lookback : 0n;
+    const chunk = 4_000n;
+    const poolId = launchPoolId(token);
+
+    for (let end = latest; end >= fromBlock; end -= chunk) {
+      const start = end + 1n - chunk < fromBlock ? fromBlock : end + 1n - chunk;
+      let logs: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
+      try {
+        logs = await publicClient.getLogs({
+          address: V4_POOL_MANAGER,
+          event: swapEvent,
+          args: { id: poolId },
+          fromBlock: start,
+          toBlock: end,
+        });
+      } catch {
+        continue;
+      }
+      for (const log of logs) {
+        const price = usdPerTokenFromSqrt(
+          log.args.sqrtPriceX96 ?? 0n,
+          tokenIsCurrency0,
+        );
+        if (price >= GRADUATION_PRICE) return true;
+      }
     }
-    return peak > 0 ? peak : null;
+    return false;
   } catch {
-    return null;
+    return false;
   }
 }
 
