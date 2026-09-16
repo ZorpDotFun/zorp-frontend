@@ -3,6 +3,7 @@ import { parseAbiItem, type Address } from "viem";
 import { GRADUATION_MC_USD, LAUNCH_FACTORY, TOTAL_SUPPLY } from "./addresses";
 import {
   publicClient,
+  peekLaunch,
   readLaunch,
   readLaunchCount,
   readLaunches,
@@ -18,70 +19,94 @@ import {
 } from "./tokens";
 
 const peakChecked = new Set<string>();
-
 const PRICE_POLL_MS = 8_000;
+const SCAN_CONCURRENCY = 3;
+const LIST_KEY = "zorp-launch-list";
 
 const launchedEvent = parseAbiItem(
   "event TokenLaunched(address indexed token, address indexed creator, address indexed pairAsset, uint256 supply, uint256 openingPrice, uint256 firstBuySpent, uint256 firstBuyTokens)",
 );
 
 export function useLaunches() {
-  const [tokens, setTokens] = useState<Token[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [tokens, setTokens] = useState<Token[]>(() => readCachedLaunchList());
+  const [loading, setLoading] = useState(() => readCachedLaunchList().length === 0);
   const [error, setError] = useState<string | null>(null);
   const tokensRef = useRef<Token[]>([]);
+  const refreshGen = useRef(0);
   tokensRef.current = tokens;
 
+  const publish = useCallback((next: Token[]) => {
+    for (const row of next) rememberLaunch(row);
+    writeCachedLaunchList(next);
+    tokensRef.current = next;
+    setTokens(next);
+  }, []);
+
   const refresh = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+    const gen = ++refreshGen.current;
+    if (!silent && tokensRef.current.length === 0) setLoading(true);
     try {
       const rows = await readLaunches();
-      const priced = await Promise.all(rows.map(withLiveMarket));
-      for (const row of priced) rememberLaunch(row);
-      setTokens(priced);
+      if (gen !== refreshGen.current) return;
+      const seeded = rows.map(withKnownGraduation);
+      publish(seeded);
       setError(null);
+      setLoading(false);
+
+      const priced = await Promise.all(seeded.map(withLiveMarket));
+      if (gen !== refreshGen.current) return;
+      publish(priced);
+
+      const scanned = await mapPool(priced, SCAN_CONCURRENCY, scanGraduation);
+      if (gen !== refreshGen.current) return;
+      publish(scanned);
     } catch (cause) {
       if (!silent || tokensRef.current.length === 0) {
         setError(cause instanceof Error ? cause.message : "Could not load launches.");
       }
-    } finally {
-      if (!silent) setLoading(false);
+      if (gen === refreshGen.current) setLoading(false);
     }
-  }, []);
+  }, [publish]);
 
   const refreshPrices = useCallback(async () => {
     const current = tokensRef.current;
     if (current.length === 0) return;
     const priced = await Promise.all(current.map(withLiveMarket));
-    for (const row of priced) rememberLaunch(row);
-    setTokens(priced);
-  }, []);
+    publish(priced);
+  }, [publish]);
 
   const upsert = useCallback(async (address: Address) => {
     const key = address.toLowerCase();
     if (tokensRef.current.some((row) => row.address.toLowerCase() === key)) return;
     try {
-      let row = await readLaunch(address);
+      let row = peekLaunch(address) ?? (await readLaunch(address));
       if (!row) return;
       if (!row.name || !row.image) {
         await wait(700);
         row = (await readLaunch(address)) ?? row;
       }
-      const priced = await withLiveMarket(row);
-      rememberLaunch(priced);
+      const seeded = withKnownGraduation(row);
+      publish([seeded, ...tokensRef.current.filter((item) => item.address.toLowerCase() !== key)]);
+      const priced = await withLiveMarket(seeded);
+      const scanned = await scanGraduation(priced);
+      rememberLaunch(scanned);
       setTokens((current) => {
-        if (current.some((item) => item.address.toLowerCase() === key)) return current;
-        return [priced, ...current];
+        const next = current.some((item) => item.address.toLowerCase() === key)
+          ? current.map((item) => (item.address.toLowerCase() === key ? scanned : item))
+          : [scanned, ...current];
+        writeCachedLaunchList(next);
+        tokensRef.current = next;
+        return next;
       });
       setError(null);
     } catch {
       void refresh(true);
     }
-  }, [refresh]);
+  }, [publish, refresh]);
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(false);
+    void refresh(tokensRef.current.length > 0);
 
     const unwatch = publicClient.watchEvent({
       address: LAUNCH_FACTORY,
@@ -114,6 +139,7 @@ export function useLaunches() {
 
     return () => {
       cancelled = true;
+      refreshGen.current += 1;
       unwatch();
       window.clearInterval(poll);
       window.clearInterval(pricePoll);
@@ -121,6 +147,13 @@ export function useLaunches() {
   }, [refresh, refreshPrices, upsert]);
 
   return { tokens, loading, error, refresh };
+}
+
+function withKnownGraduation(token: Token): Token {
+  return {
+    ...token,
+    graduated: token.graduated || hasGraduated(token.address),
+  };
 }
 
 function wait(ms: number) {
@@ -144,26 +177,73 @@ async function withLiveMarket(token: Token): Promise<Token> {
     const fdv =
       Math.max(liveFdv, dexFdv, price > 0 ? price * TOTAL_SUPPLY : 0) ||
       token.fdv;
-    const key = token.address.toLowerCase();
-    noteMarketCap(
-      token.address,
-      fdv,
-      impliedPeakFdv(dexFdv || fdv, dex.priceChange),
-    );
-    let graduated =
+    const implied = impliedPeakFdv(dexFdv || fdv, dex.priceChange);
+    noteMarketCap(token.address, fdv, implied);
+    const graduated =
+      token.graduated ||
       fdv >= GRADUATION_MC_USD ||
       hasGraduated(token.address) ||
-      impliedPeakFdv(dexFdv || fdv, dex.priceChange) >= GRADUATION_MC_USD;
-    if (!graduated && !peakChecked.has(key)) {
-      peakChecked.add(key);
-      graduated = await launchEverGraduated(
-        token.address as `0x${string}`,
-        token.tokenIsCurrency0,
-      );
-      if (graduated) noteMarketCap(token.address, GRADUATION_MC_USD);
-    }
+      implied >= GRADUATION_MC_USD;
+    if (graduated) noteMarketCap(token.address, GRADUATION_MC_USD);
     return { ...token, price, fdv, mcap: fdv, graduated };
   } catch {
-    return token;
+    return withKnownGraduation(token);
+  }
+}
+
+async function scanGraduation(token: Token): Promise<Token> {
+  if (token.graduated || hasGraduated(token.address)) {
+    return { ...token, graduated: true };
+  }
+  const key = token.address.toLowerCase();
+  if (peakChecked.has(key)) return token;
+  peakChecked.add(key);
+  const ever = await launchEverGraduated(
+    token.address as `0x${string}`,
+    token.tokenIsCurrency0,
+  );
+  if (!ever) return token;
+  noteMarketCap(token.address, GRADUATION_MC_USD);
+  return { ...token, graduated: true };
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+) {
+  if (items.length === 0) return [] as R[];
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      out[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return out;
+}
+
+function readCachedLaunchList(): Token[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = sessionStorage.getItem(LIST_KEY);
+    const rows = raw ? (JSON.parse(raw) as Token[]) : [];
+    for (const row of rows) rememberLaunch(row);
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedLaunchList(tokens: Token[]) {
+  try {
+    sessionStorage.setItem(LIST_KEY, JSON.stringify(tokens));
+  } catch {
+    /* private mode */
   }
 }
