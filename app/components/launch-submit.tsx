@@ -10,8 +10,10 @@ import { Link } from "react-router";
 import { explorerAddress, explorerTx, launchToken } from "../lib/factory";
 import { validateFees, type FeeConfig } from "../lib/fee-models";
 import { openWalletAuth } from "../lib/privy-wallet";
+import { dexscreenerTokenUrl } from "../lib/token-chart-data";
 import { shortenAddress } from "../lib/tokens";
 import { usePrivyReady } from "./app-privy-provider";
+import { LaunchSuccessModal } from "./launch-success-modal";
 
 const buttonClass =
   "h-12 w-full rounded-full bg-yellowell text-[15px] font-bold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60";
@@ -63,6 +65,7 @@ function LaunchSubmitLive({
   const [result, setResult] = useState<{ token: string; hash: string } | null>(
     null,
   );
+  const [modalOpen, setModalOpen] = useState(false);
 
   async function onLaunch() {
     const wallet =
@@ -105,6 +108,7 @@ function LaunchSubmitLive({
       });
       setResult(launched);
       setStatus("done");
+      setModalOpen(true);
     } catch (cause) {
       setStatus("idle");
       setError(cause instanceof Error ? cause.message : "Launch failed.");
@@ -150,13 +154,30 @@ function LaunchSubmitLive({
               tx
             </a>
           </p>
-          <Link
-            to={`/token/${result.token}`}
-            className="inline-flex h-10 items-center rounded-full bg-ink px-4 text-[13px] font-bold text-canvas"
-          >
-            Open token page
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to={`/token/${result.token}`}
+              className="inline-flex h-10 items-center rounded-full bg-ink px-4 text-[13px] font-bold text-canvas"
+            >
+              View Live Token
+            </Link>
+            <a
+              href={dexscreenerTokenUrl(result.token)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 items-center rounded-full bg-surface px-4 text-[13px] font-bold text-ink ring-1 ring-line"
+            >
+              Dexscreener
+            </a>
+          </div>
         </div>
+      ) : null}
+      {modalOpen && result ? (
+        <LaunchSuccessModal
+          ticker={ticker}
+          token={result.token}
+          onClose={() => setModalOpen(false)}
+        />
       ) : null}
     </div>
   );
