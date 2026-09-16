@@ -24,7 +24,7 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Analytics() {
-  const [range, setRange] = useState<"24h" | "all">("24h");
+  const [range, setRange] = useState<"24h" | "all">("all");
   const [stats, setStats] = useState<ProtocolStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,11 +41,10 @@ export default function Analytics() {
     return () => stop();
   }, []);
 
-  const volume = range === "24h" ? (stats?.volume24h ?? 0) : (stats?.volumeAll ?? 0);
+  const volume = stats?.volumeAll ?? 0;
   const launches = range === "24h" ? (stats?.launches24h ?? 0) : (stats?.launchesAll ?? 0);
   const fees = range === "24h" ? (stats?.fees24h ?? 0) : (stats?.feesAll ?? 0);
   const claimed = range === "24h" ? (stats?.claimed24h ?? 0) : (stats?.claimedAll ?? 0);
-  const volumeDelta = changePct(stats?.volume24h ?? 0, stats?.volumePrev24h ?? 0);
   const launchDelta = changePct(stats?.launches24h ?? 0, stats?.launchesPrev24h ?? 0);
   const feesDelta = changePct(stats?.fees24h ?? 0, stats?.feesPrev24h ?? 0);
   const claimedDelta = changePct(stats?.claimed24h ?? 0, stats?.claimedPrev24h ?? 0);
@@ -103,10 +102,9 @@ export default function Analytics() {
         ) : (
           <div className="mt-8 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             <Stat
-              label={range === "24h" ? "24h volume" : "All-time volume"}
+              label="Protocol volume"
               value={stats ? formatStatUsd(volume) : "—"}
-              delta={stats && range === "24h" ? volumeDelta : null}
-              hint={range === "24h" ? "from prior 24h" : "USDC notional"}
+              hint="Total USDC swapped across all Zorp pools"
               pending={!stats}
             />
             <Stat
@@ -146,9 +144,8 @@ export default function Analytics() {
         )}
 
         <p className="mt-8 text-[12px] text-muted">
-          Data is read from Arc RPC. The 24h view uses a rolling window, not a
-          completed UTC day. Swaps include first buys and protocol distribute
-          trades.
+          Volume is the lifetime USDC notional swapped through every Zorp
+          pool. The 24h toggle only applies to launches, fees, and claims.
         </p>
       </section>
 
@@ -156,7 +153,7 @@ export default function Analytics() {
         <BarCard
           title="Trading volume"
           value={formatStatUsd(volume)}
-          hint="Daily USDC swapped in Zorp pools. Latest UTC day is highlighted."
+          hint="Lifetime USDC swapped in Zorp pools, bucketed by UTC day."
           days={stats?.volumeDays ?? emptyDays()}
           money
         />

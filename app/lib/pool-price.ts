@@ -114,15 +114,7 @@ export async function fetchSwapPrints(
   try {
     const logs = await collectSwapLogs(token);
     if (logs.length === 0) return [];
-
-    const blocks = [...new Set(logs.map((log) => log.blockNumber))];
-    const stamps = new Map<bigint, number>();
-    await Promise.all(
-      blocks.map(async (blockNumber) => {
-        const block = await publicClient.getBlock({ blockNumber });
-        stamps.set(blockNumber, Number(block.timestamp));
-      }),
-    );
+    const stamps = await stampSwapBlocks(logs.map((log) => log.blockNumber));
 
     return logs
       .map((log) => {
@@ -142,9 +134,9 @@ export async function fetchSwapPrints(
 
 async function collectSwapLogs(token: Address) {
   const latest = await publicClient.getBlockNumber();
-  const lookback = 80_000n;
+  const lookback = 24_000n;
   const fromBlock = latest > lookback ? latest - lookback : 0n;
-  const chunk = 10_000n;
+  const chunk = 3_000n;
   const poolId = launchPoolId(token);
   const pages: Awaited<ReturnType<typeof publicClient.getLogs>>[] = [];
 
@@ -163,8 +155,41 @@ async function collectSwapLogs(token: Address) {
     } catch {
       continue;
     }
-    if (pages.reduce((sum, page) => sum + page.length, 0) >= 200) break;
+    if (pages.reduce((sum, page) => sum + page.length, 0) >= 80) break;
   }
 
   return pages.flat();
+}
+
+async function stampSwapBlocks(blocks: bigint[]) {
+  const unique = [...new Set(blocks)].sort((a, b) => (a < b ? -1 : 1));
+  const stamps = new Map<bigint, number>();
+  if (unique.length === 0) return stamps;
+  const first = unique[0];
+  const last = unique[unique.length - 1];
+  try {
+    const [start, end] = await Promise.all([
+      publicClient.getBlock({ blockNumber: first }),
+      first === last
+        ? Promise.resolve(null)
+        : publicClient.getBlock({ blockNumber: last }),
+    ]);
+    const startTs = Number(start.timestamp);
+    const endTs = end ? Number(end.timestamp) : startTs;
+    const span = last - first;
+    for (const block of unique) {
+      stamps.set(
+        block,
+        span === 0n
+          ? startTs
+          : startTs +
+              Number((block - first) * BigInt(Math.max(endTs - startTs, 0))) /
+                Number(span),
+      );
+    }
+  } catch {
+    const now = Math.floor(Date.now() / 1000);
+    for (const block of unique) stamps.set(block, now);
+  }
+  return stamps;
 }

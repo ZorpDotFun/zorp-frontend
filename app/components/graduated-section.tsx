@@ -184,6 +184,7 @@ function GraduatedCard({ token }: { token: Token }) {
           <div className="min-w-0">
             <p className="truncate text-[14px] font-bold text-ink">
               ${token.ticker}
+              <span className="font-medium text-muted">/{token.pair}</span>
             </p>
             <p className="truncate text-[11px] text-muted">{token.name}</p>
           </div>

@@ -37,7 +37,7 @@ export function arcTransport() {
   return fallback(
     ARC_RPCS.map((url) =>
       http(url, {
-        timeout: 12_000,
+        timeout: 3_500,
         retryCount: 0,
         fetch: failoverFetch,
       }),

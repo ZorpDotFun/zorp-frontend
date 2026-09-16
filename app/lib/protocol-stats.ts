@@ -47,7 +47,7 @@ export type ProtocolStats = {
   partial: boolean;
 };
 
-type Print = { time: number; value: number; account?: string };
+type Print = { time: number; value: number; account?: string; key?: string };
 type LaunchRow = { address: Address; creator: string; launchedAt: number };
 
 let memoryCache: ProtocolStats | null = null;
@@ -64,6 +64,7 @@ let liveFeesHeld = 0;
 let liveFeeBps = PROTOCOL_SWAP_FEE_BPS;
 let liveDex24h = 0;
 const claimKeys = new Set<string>();
+const swapKeys = new Set<string>();
 const liveListeners = new Set<(stats: ProtocolStats) => void>();
 let liveStarted = false;
 let claimsReady = false;
@@ -436,12 +437,17 @@ async function swapLogsForToken(token: Address, fromBlock: bigint, toBlock: bigi
   const stamps = await stampBlocks(logs.map((log) => log.blockNumber));
   const prints: Print[] = [];
   for (const log of logs) {
+    const key = `${log.transactionHash}:${log.logIndex}`;
+    if (swapKeys.has(key)) continue;
     const time = stamps.get(log.blockNumber);
     if (!time) continue;
     const usdc = tokenIs0 ? log.args.amount1 : log.args.amount0;
     if (usdc === undefined) continue;
     const value = Number(formatUnits(usdc < 0n ? -usdc : usdc, USDC_DECIMALS));
-    if (value > 0) prints.push({ time, value });
+    if (value > 0) {
+      swapKeys.add(key);
+      prints.push({ time, value, key });
+    }
   }
   return prints;
 }
@@ -687,10 +693,9 @@ function assemble({
   feeBps: number;
   partial: boolean;
 }): ProtocolStats {
-  const chain24h = sumSince(swapPrints, now - DAY);
-  const volume24h = chain24h > 0 ? chain24h : dex24h;
+  const volume24h = sumSince(swapPrints, now - DAY);
   const volumePrev24h = sumBetween(swapPrints, now - 2 * DAY, now - DAY);
-  const volumeAll = Math.max(sumSince(swapPrints, 0), volume24h);
+  const volumeAll = sumSince(swapPrints, 0);
   const accruedAll = sumSince(feePrints, 0);
   const feesAll = accruedAll > 0 ? Math.max(accruedAll, feesHeld) : feesHeld;
   const fees24h = accruedAll > 0 ? sumSince(feePrints, now - DAY) : 0;
@@ -730,15 +735,18 @@ function assemble({
 
 function cacheStats(stats: ProtocolStats) {
   const prev = memoryCache;
-  const next =
-    prev && stats.claimedAll < prev.claimedAll && !claimsReady
-      ? {
-          ...stats,
-          claimed24h: Math.max(stats.claimed24h, prev.claimed24h),
-          claimedPrev24h: Math.max(stats.claimedPrev24h, prev.claimedPrev24h),
-          claimedAll: prev.claimedAll,
-        }
-      : stats;
+  let next = stats;
+  if (prev && stats.volumeAll < prev.volumeAll) {
+    next = { ...next, volumeAll: prev.volumeAll };
+  }
+  if (prev && stats.claimedAll < prev.claimedAll && !claimsReady) {
+    next = {
+      ...next,
+      claimed24h: Math.max(stats.claimed24h, prev.claimed24h),
+      claimedPrev24h: Math.max(stats.claimedPrev24h, prev.claimedPrev24h),
+      claimedAll: prev.claimedAll,
+    };
+  }
   memoryCache = next;
   try {
     sessionStorage.setItem(CACHE_KEY, JSON.stringify(next));

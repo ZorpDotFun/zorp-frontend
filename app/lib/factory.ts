@@ -5,7 +5,6 @@ import {
   encodeFunctionData,
   erc20Abi,
   isAddress,
-  parseAbiItem,
   parseEventLogs,
   parseUnits,
   type Abi,
@@ -40,6 +39,16 @@ export const publicClient = createPublicClient({
   chain: arcChain,
   transport: arcTransport(),
 });
+
+const launchCache = new Map<string, Token>();
+
+export function peekLaunch(address: string): Token | undefined {
+  return launchCache.get(address.toLowerCase());
+}
+
+export function rememberLaunch(token: Token) {
+  launchCache.set(token.address.toLowerCase(), token);
+}
 
 export const launchFactoryAbi = [
   {
@@ -264,10 +273,6 @@ export const launchTokenAbi = [
     outputs: [{ name: "", type: "string" }],
   },
 ] as const;
-
-const tokenMetadataSetEvent = parseAbiItem(
-  "event TokenMetadataSet(address indexed token, string name, string symbol, string image, string description, string twitter, string telegram, string website)",
-);
 
 export const creatorBackedFees = presetFees("creator");
 
@@ -538,13 +543,15 @@ export async function readLaunch(address: Address): Promise<Token | null> {
   ]);
   if (!launch[10]) return null;
   const image = info[3].trim() || (await readOnchainImage(address));
-  return toToken(
+  const token = toToken(
     address,
     [info[0], info[1], info[2], image, info[4], info[5], info[6], info[7]],
     launch[6],
     launch[2],
     launch[9],
   );
+  rememberLaunch(token);
+  return token;
 }
 
 async function readOnchainImage(address: Address): Promise<string> {
@@ -560,20 +567,7 @@ async function readOnchainImage(address: Address): Promise<string> {
       /* try the next getter — live tokens only have `image` */
     }
   }
-  try {
-    const latest = await publicClient.getBlockNumber();
-    const fromBlock = latest > 20_000n ? latest - 20_000n : 0n;
-    const logs = await publicClient.getLogs({
-      address: LAUNCH_FACTORY,
-      event: tokenMetadataSetEvent,
-      args: { token: address },
-      fromBlock,
-      toBlock: latest,
-    });
-    return (logs.at(-1)?.args.image ?? "").trim();
-  } catch {
-    return "";
-  }
+  return "";
 }
 
 export async function readLaunchCount(): Promise<number> {

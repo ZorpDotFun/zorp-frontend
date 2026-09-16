@@ -33,6 +33,7 @@ export function TokenArt({
           src={src}
           alt=""
           className="absolute inset-0 size-full object-cover"
+          decoding="async"
           onError={() => {
             setIndex((current) => {
               if (current + 1 < srcs.length) return current + 1;

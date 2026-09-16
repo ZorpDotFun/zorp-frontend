@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseAbiItem, type Address } from "viem";
 import { LAUNCH_FACTORY, TOTAL_SUPPLY } from "./addresses";
-import { publicClient, readLaunch, readLaunchCount, readLaunches } from "./factory";
+import {
+  publicClient,
+  readLaunch,
+  readLaunchCount,
+  readLaunches,
+  rememberLaunch,
+} from "./factory";
 import { readLiveUsdPrice } from "./pool-price";
 import { fetchDexscreenerPoints } from "./token-chart-data";
 import type { Token } from "./tokens";
@@ -22,6 +28,7 @@ export function useLaunches() {
     try {
       const rows = await readLaunches();
       const priced = await Promise.all(rows.map(withLiveMarket));
+      for (const row of priced) rememberLaunch(row);
       setTokens(priced);
       setError(null);
     } catch (cause) {
@@ -44,6 +51,7 @@ export function useLaunches() {
         row = (await readLaunch(address)) ?? row;
       }
       const priced = await withLiveMarket(row);
+      rememberLaunch(priced);
       setTokens((current) => {
         if (current.some((item) => item.address.toLowerCase() === key)) return current;
         return [priced, ...current];

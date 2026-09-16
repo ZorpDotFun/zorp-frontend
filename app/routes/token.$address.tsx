@@ -10,7 +10,7 @@ import { CreatorFees } from "../components/creator-fees";
 import { TokenTrade } from "../components/token-trade";
 import { TokenMarket } from "../components/token-market";
 import { TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
-import { readLaunch, readLaunchFees } from "../lib/factory";
+import { peekLaunch, readLaunch, readLaunchFees } from "../lib/factory";
 import { feeDestinationLine, feeModelLabel, type FeeConfig } from "../lib/fee-models";
 import { fetchSwapPrints, readLiveUsdPrice } from "../lib/pool-price";
 import { MARKET_REFRESH } from "../lib/token-market";
@@ -30,11 +30,16 @@ export function meta({ params }: Route.MetaArgs) {
 }
 
 export default function TokenPage({ params }: Route.ComponentProps) {
-  const [token, setToken] = useState<Token | null>(null);
+  const cached = isAddress(params.address) ? peekLaunch(params.address) : undefined;
+  const [token, setToken] = useState<Token | null>(cached ?? null);
   const [error, setError] = useState<string | null>(null);
-  const [priceUsd, setPriceUsd] = useState(openingPriceUsd());
-  const [fdv, setFdv] = useState(TARGET_FDV_USD);
-  const [points, setPoints] = useState<ChartPoint[]>([]);
+  const [priceUsd, setPriceUsd] = useState(cached?.price ?? openingPriceUsd());
+  const [fdv, setFdv] = useState(cached?.fdv && cached.fdv > 0 ? cached.fdv : TARGET_FDV_USD);
+  const [points, setPoints] = useState<ChartPoint[]>(
+    cached
+      ? [{ time: cached.launchedAt / 1000, value: cached.price || openingPriceUsd() }]
+      : [],
+  );
 
   useEffect(() => {
     if (!isAddress(params.address)) {
@@ -76,6 +81,11 @@ export default function TokenPage({ params }: Route.ComponentProps) {
           return;
         }
         setToken(row);
+        setPoints((current) =>
+          current.length > 0
+            ? current
+            : [{ time: row.launchedAt / 1000, value: openingPriceUsd() }],
+        );
         document.title = `${row.name} ($${row.ticker}) : Zorp`;
         return load(row).then(() => {
           timer = window.setInterval(() => {
@@ -188,6 +198,7 @@ function TokenDetails({
         <div className="min-w-0 flex-1">
           <h1 className="truncate font-display text-[26px] tracking-wide text-ink">
             ${token.ticker}
+            <span className="text-muted">/{token.pair}</span>
           </h1>
           <p className="truncate text-[14px] text-muted">{token.name}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
