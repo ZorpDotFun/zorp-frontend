@@ -1,5 +1,5 @@
 import { encodeAbiParameters, keccak256, parseAbiItem, type Address } from "viem";
-import { GRADUATION_MC_USD, TOTAL_SUPPLY } from "./addresses";
+import { GRADUATION_MC_USD, LAUNCH_HOOK, TOTAL_SUPPLY, USDC } from "./addresses";
 import { getPublicClient, launchFactoryAbi } from "./factory";
 import { getNetwork, protocolOf } from "./networks";
 import type { ChartPoint } from "./token-chart-data";
@@ -72,8 +72,8 @@ export async function refreshPairUsd() {
   return pairUsdCache;
 }
 
-export function launchPoolId(token: Address) {
-  const key = launchPoolKey(token);
+export function launchPoolIdFor(token: Address, pairAsset: Address, hook: Address) {
+  const tokenIs0 = token.toLowerCase() < pairAsset.toLowerCase();
   return keccak256(
     encodeAbiParameters(
       [
@@ -90,15 +90,24 @@ export function launchPoolId(token: Address) {
       ],
       [
         {
-          currency0: key.currency0,
-          currency1: key.currency1,
-          fee: key.fee,
-          tickSpacing: key.tickSpacing,
-          hooks: key.hooks,
+          currency0: tokenIs0 ? token : pairAsset,
+          currency1: tokenIs0 ? pairAsset : token,
+          fee: POOL_FEE,
+          tickSpacing: TICK_SPACING,
+          hooks: hook,
         },
       ],
     ),
   );
+}
+
+export function launchPoolId(token: Address) {
+  const protocol = protocolOf();
+  return launchPoolIdFor(token, protocol.pairAsset, protocol.hook);
+}
+
+export function arcLaunchPoolId(token: Address) {
+  return launchPoolIdFor(token, USDC, LAUNCH_HOOK);
 }
 
 /** USDC (6dp) raw units per 1 whole launch token. */

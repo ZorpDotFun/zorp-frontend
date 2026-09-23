@@ -1,9 +1,9 @@
 import { erc20Abi, formatUnits, parseAbiItem, type Address } from "viem";
 import { fetchApiJson } from "./api";
 import { FEE_DISTRIBUTOR, LAUNCH_FACTORY, USDC, V4_POOL_MANAGER, ZORP_BUYBACK } from "./addresses";
-import { feeDistributorAbi, launchFactoryAbi, publicClient, readProtocolFeeBps } from "./factory";
+import { feeDistributorAbi, getPublicClient, launchFactoryAbi, readProtocolFeeBps } from "./factory";
 import { PROTOCOL_SWAP_FEE_BPS } from "./fee-models";
-import { launchPoolId } from "./pool-price";
+import { arcLaunchPoolId } from "./pool-price";
 
 const USDC_DECIMALS = 6;
 const DAY = 86_400;
@@ -12,7 +12,7 @@ const HALF_HOUR = 1_800;
 const LOG_CHUNK = 4_000n;
 const CLAIM_RECENT = 80_000n;
 const CLAIM_FLOOR = 200_000n;
-const CACHE_KEY = "zorp-protocol-stats-v3";
+const CACHE_KEY = "zorp-protocol-stats-v4";
 const SWAP_PRINTS_KEY = "zorp-swap-prints-v1";
 /** Arc mainstage window on 16 Sep 2026 — factory cannot be earlier than this UTC day. */
 const FACTORY_DAY = Math.floor(Date.UTC(2026, 8, 16) / 1000);
@@ -143,7 +143,7 @@ async function runFetchProtocolStats(
   seedClaimsFromCache();
   seedVolumeFromCache();
   seedSwapPrints();
-  const headPromise = publicClient.getBlockNumber();
+  const headPromise = arcClient().getBlockNumber();
   const claimsStart = headPromise.then((head) => pullCreatorClaims(head));
   const feesStart = headPromise.then((head) => {
     const floor = head > 120_000n ? head - 120_000n : 0n;
@@ -207,6 +207,7 @@ async function runFetchProtocolStats(
   const swapPromise = collectSwapVolume(tokens, fromBlock, head, (prints) => {
     swapPrintsMem = prints;
     persistSwapPrints();
+    commitVolume(sumSince(prints, 0));
     publish(true);
   }).then(async (result) => {
     let next = result;
@@ -214,15 +215,16 @@ async function runFetchProtocolStats(
       next = await collectSwapVolumeByToken(tokens, fromBlock, head, (prints) => {
         swapPrintsMem = prints;
         persistSwapPrints();
+        commitVolume(sumSince(prints, 0));
         publish(true);
       });
     }
     swapPrintsMem = next.prints;
     persistSwapPrints();
+    commitVolume(sumSince(next.prints, 0));
     if (next.ok) {
       scannedTo = head;
       swapHistoryReady = true;
-      commitVolume(sumSince(next.prints, 0));
     }
   });
 
@@ -303,7 +305,7 @@ function publishLive(partial: boolean) {
 }
 
 function startLiveStats() {
-  publicClient.watchEvent({
+  arcClient().watchEvent({
     address: FEE_DISTRIBUTOR,
     event: claimedEvent,
     pollingInterval: 2_000,
@@ -314,7 +316,7 @@ function startLiveStats() {
       });
     },
   });
-  publicClient.watchEvent({
+  arcClient().watchEvent({
     address: V4_POOL_MANAGER,
     event: swapEvent,
     pollingInterval: 2_000,
@@ -325,7 +327,7 @@ function startLiveStats() {
       });
     },
   });
-  publicClient.watchEvent({
+  arcClient().watchEvent({
     address: FEE_DISTRIBUTOR,
     event: accruedEvent,
     pollingInterval: 2_000,
@@ -368,7 +370,7 @@ async function refreshLiveClaims() {
   try {
     seedClaimsFromCache();
     const [head, feesHeld, rows] = await Promise.all([
-      publicClient.getBlockNumber(),
+      arcClient().getBlockNumber(),
       readTreasuryUsdc(),
       readLaunchIndex(),
     ]);
@@ -410,9 +412,13 @@ function commitVolume(scanned: number) {
   volumeReady = true;
 }
 
+function arcClient() {
+  return getPublicClient("arc");
+}
+
 function rememberLaunchPools(tokens: Address[]) {
   for (const token of tokens) {
-    livePools.set(launchPoolId(token).toLowerCase(), token.toLowerCase() < USDC.toLowerCase());
+    livePools.set(arcLaunchPoolId(token).toLowerCase(), token.toLowerCase() < USDC.toLowerCase());
   }
 }
 
@@ -445,7 +451,7 @@ function withCreatorFees(stats: ProtocolStats): ProtocolStats {
 
 async function hydrateCreatorFeesFromChain() {
   try {
-    const [rows, head] = await Promise.all([readLaunchIndex(), publicClient.getBlockNumber()]);
+    const [rows, head] = await Promise.all([readLaunchIndex(), arcClient().getBlockNumber()]);
     rememberCreatorShare(rows);
     const floor = head > 200_000n ? head - 200_000n : FACTORY_BLOCK;
     await collectProtocolFees(floor, head);
@@ -604,7 +610,7 @@ async function ingestSwapLogs(
 }
 
 async function readLaunchIndex(): Promise<LaunchRow[]> {
-  const count = await publicClient.readContract({
+  const count = await arcClient().readContract({
     address: LAUNCH_FACTORY,
     abi: launchFactoryAbi,
     functionName: "launchCount",
@@ -613,7 +619,7 @@ async function readLaunchIndex(): Promise<LaunchRow[]> {
 
   const addresses = await Promise.all(
     Array.from({ length: Number(count) }, (_, index) =>
-      publicClient.readContract({
+      arcClient().readContract({
         address: LAUNCH_FACTORY,
         abi: launchFactoryAbi,
         functionName: "allTokens",
@@ -625,7 +631,7 @@ async function readLaunchIndex(): Promise<LaunchRow[]> {
   const [launches, feeLaunches] = await Promise.all([
     Promise.all(
       addresses.map((address) =>
-        publicClient.readContract({
+        arcClient().readContract({
           address: LAUNCH_FACTORY,
           abi: launchFactoryAbi,
           functionName: "launches",
@@ -635,8 +641,7 @@ async function readLaunchIndex(): Promise<LaunchRow[]> {
     ),
     Promise.all(
       addresses.map((address) =>
-        publicClient
-          .readContract({
+        arcClient().readContract({
             address: FEE_DISTRIBUTOR,
             abi: feeDistributorAbi,
             functionName: "launches",
@@ -682,11 +687,11 @@ async function collectSwapVolume(
 
   const pools = new Map(
     tokens.map((token) => [
-      launchPoolId(token).toLowerCase(),
+      arcLaunchPoolId(token).toLowerCase(),
       token.toLowerCase() < USDC.toLowerCase(),
     ]),
   );
-  const ids = tokens.map((token) => launchPoolId(token));
+  const ids = tokens.map((token) => arcLaunchPoolId(token));
   const pages: Print[] = [...swapPrintsMem];
   let ok = true;
 
@@ -739,7 +744,7 @@ async function collectSwapVolumeByToken(
       const logs = await getLogsSplit({
         address: V4_POOL_MANAGER,
         event: swapEvent,
-        args: { id: launchPoolId(token) },
+        args: { id: arcLaunchPoolId(token) },
         fromBlock,
         toBlock: latest,
       });
@@ -882,7 +887,7 @@ async function getLogsSplit({
 }) {
   if (fromBlock > toBlock) return [];
   try {
-    return await publicClient.getLogs({
+    return await arcClient().getLogs({
       address,
       event,
       ...(args ? { args } : {}),
@@ -903,7 +908,7 @@ async function getLogsSplit({
 
 async function readTreasuryUsdc() {
   try {
-    const raw = await publicClient.readContract({
+    const raw = await arcClient().readContract({
       address: USDC,
       abi: erc20Abi,
       functionName: "balanceOf",
@@ -925,10 +930,10 @@ async function lookbackBlocks(latest: bigint, seconds: number) {
     const span = latest > 2_000n ? 2_000n : latest;
     const from = latest - span;
     const [head, tail] = await Promise.all([
-      publicClient.getBlock({ blockNumber: latest }),
+      arcClient().getBlock({ blockNumber: latest }),
       span === 0n
         ? Promise.resolve(null)
-        : publicClient.getBlock({ blockNumber: from }),
+        : arcClient().getBlock({ blockNumber: from }),
     ]);
     if (!tail) return 20_000n;
     const dt = Number(head.timestamp) - Number(tail.timestamp);
@@ -962,10 +967,10 @@ async function stampBlocks(blocks: bigint[]) {
   const last = unique[unique.length - 1];
   try {
     const [start, end] = await Promise.all([
-      publicClient.getBlock({ blockNumber: first }),
+      arcClient().getBlock({ blockNumber: first }),
       first === last
         ? Promise.resolve(null)
-        : publicClient.getBlock({ blockNumber: last }),
+        : arcClient().getBlock({ blockNumber: last }),
     ]);
     const startTs = Number(start.timestamp);
     const endTs = end ? Number(end.timestamp) : startTs;
@@ -1015,10 +1020,7 @@ function assemble({
   const volume24h = sumSince(swapPrints, now - DAY);
   const volumePrev24h = sumBetween(swapPrints, now - 2 * DAY, now - DAY);
   const scannedVolume = sumSince(swapPrints, 0);
-  const volumeAll = Math.max(
-    committedVolume,
-    swapHistoryReady ? scannedVolume : committedVolume,
-  );
+  const volumeAll = Math.max(committedVolume, scannedVolume);
   const accruedAll = sumSince(feePrints, 0);
   const feesAll = accruedAll > 0 ? Math.max(accruedAll, feesHeld) : feesHeld;
   const fees24h = accruedAll > 0 ? sumSince(feePrints, now - DAY) : 0;
@@ -1059,7 +1061,7 @@ function assemble({
     launch30m,
     launch1h,
     factoryLiveAt: from,
-    volumeReady,
+    volumeReady: volumeReady || volumeAll > 0,
     partial: partial && !snapshotReady,
   };
 }
