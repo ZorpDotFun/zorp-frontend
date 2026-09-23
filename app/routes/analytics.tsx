@@ -50,11 +50,9 @@ export default function Analytics() {
 
   const volume = stats?.volumeAll ?? 0;
   const launches = range === "24h" ? (stats?.launches24h ?? 0) : (stats?.launchesAll ?? 0);
-  const fees = range === "24h" ? (stats?.fees24h ?? 0) : (stats?.feesAll ?? 0);
-  const claimed = range === "24h" ? (stats?.creatorFees24h ?? 0) : (stats?.creatorFeesAll ?? 0);
+  const fees = stats?.feesAll ?? 0;
+  const claimed = stats?.creatorFeesAll ?? 0;
   const launchDelta = changePct(stats?.launches24h ?? 0, stats?.launchesPrev24h ?? 0);
-  const feesDelta = changePct(stats?.fees24h ?? 0, stats?.feesPrev24h ?? 0);
-  const claimedDelta = changePct(stats?.creatorFees24h ?? 0, stats?.creatorFeesPrev24h ?? 0);
 
   return (
     <main className="mx-auto max-w-[1180px] space-y-5 px-4 py-10 sm:px-6">
@@ -139,28 +137,32 @@ export default function Analytics() {
               pending={!stats}
             />
             <Stat
-              label={range === "24h" ? "24h protocol fees" : "Protocol fees earned"}
-              value={stats ? formatStatUsd(fees) : "—"}
-              delta={stats && range === "24h" ? feesDelta : null}
+              label="All-time protocol fees"
+              value={
+                <AnimatedUsd
+                  value={fees}
+                  ready={Boolean(stats)}
+                />
+              }
               hint={
-                range === "24h"
-                  ? "from prior 24h"
-                  : stats && stats.feesHeld > 0
-                    ? `${formatStatUsd(stats.feesHeld)} held in treasury`
-                    : "0.5% USDC swap fee"
+                stats && stats.feesHeld > 0
+                  ? `${formatStatUsd(stats.feesHeld)} held in treasury`
+                  : "0.5% USDC swap fee since factory go-live"
               }
               pending={!stats}
             />
             <Stat
-              label={range === "24h" ? "24h creator fees" : "Creator fees"}
-              value={stats ? formatStatUsd(claimed) : "—"}
-              delta={stats && range === "24h" ? claimedDelta : null}
+              label="All-time creator fees"
+              value={
+                <AnimatedUsd
+                  value={claimed}
+                  ready={Boolean(stats)}
+                />
+              }
               hint={
-                range === "24h"
-                  ? "from prior 24h"
-                  : stats && stats.creatorFeesHeld > 0
-                    ? `${formatStatUsd(stats.creatorFeesHeld)} unclaimed`
-                    : "USDC accrued to launch creators"
+                stats && stats.creatorFeesHeld > 0
+                  ? `${formatStatUsd(stats.creatorFeesHeld)} unclaimed`
+                  : "USDC accrued to launch creators since factory go-live"
               }
               pending={!stats}
             />
@@ -168,9 +170,8 @@ export default function Analytics() {
         )}
 
         <p className="mt-8 text-[12px] text-muted">
-          Volume is always all-time USDC notional swapped through every Zorp
-          pool since factory go-live. The 24h toggle only applies to launches,
-          fees, and creator fees.
+          Volume, protocol fees, and creator fees are lifetime totals since
+          factory go-live. The 24h toggle only applies to launches.
         </p>
       </section>
 
