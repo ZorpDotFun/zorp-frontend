@@ -34,7 +34,7 @@ export function meta({}: Route.MetaArgs) {
     {
       name: "description",
       content:
-        "Launch a token on Arc or Robinhood. 1B supply into a locked Uniswap v4 pool, live from block one.",
+        "Launch a token on Robinhood or Arc. 1B supply into a locked Uniswap v4 pool, live from block one.",
     },
   ];
 }

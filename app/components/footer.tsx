@@ -25,7 +25,7 @@ export function Footer() {
             </span>
           </Link>
           <p className="text-[13px] text-muted">
-            Launch coins on Arc via zorpdotfun.com
+            Launch coins on Robinhood and Arc via zorpdotfun.com
           </p>
         </div>
 

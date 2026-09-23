@@ -1,4 +1,4 @@
-import { erc20Abi, formatUnits, parseAbiItem, type Address } from "viem";
+import { erc20Abi, formatUnits, isAddress, parseAbiItem, type Address } from "viem";
 import { fetchApiJson } from "./api";
 import { FEE_DISTRIBUTOR, LAUNCH_FACTORY, USDC, V4_POOL_MANAGER, ZORP_BUYBACK } from "./addresses";
 import { feeDistributorAbi, getPublicClient, launchFactoryAbi, readProtocolFeeBps } from "./factory";
@@ -12,12 +12,18 @@ const HALF_HOUR = 1_800;
 const LOG_CHUNK = 4_000n;
 const CLAIM_RECENT = 80_000n;
 const CLAIM_FLOOR = 200_000n;
-const CACHE_KEY = "zorp-protocol-stats-v4";
+const CACHE_KEY = "zorp-protocol-stats-v5";
 const SWAP_PRINTS_KEY = "zorp-swap-prints-v1";
+const FEE_PRINTS_KEY = "zorp-fee-prints-v1";
 /** Arc mainstage window on 16 Sep 2026 — factory cannot be earlier than this UTC day. */
 const FACTORY_DAY = Math.floor(Date.UTC(2026, 8, 16) / 1000);
 /** Factory 0x0471…baAe created at Arc block 21148315. */
 export const FACTORY_BLOCK = 21_148_315n;
+/** Lifetime Accrued through block 21232000, while archive history was still complete. */
+const SEEDED_PROTOCOL_FEES = 543.801341;
+const SEEDED_CREATOR_FEES = 2_461.384485;
+/** Public RPCs prune older than ~266k blocks; stay inside the live window. */
+const FEE_LIVE_LOOKBACK = 180_000n;
 export const FACTORY_LIVE_FALLBACK = 1_789_557_183;
 export const VOLUME_INTERVALS = { "30m": HALF_HOUR, "1h": HOUR } as const;
 export type VolumeInterval = (typeof VOLUME_INTERVALS)[keyof typeof VOLUME_INTERVALS];
@@ -93,7 +99,10 @@ let liveCreators = new Set<string>();
 let liveFeesHeld = 0;
 let liveFeeBps = PROTOCOL_SWAP_FEE_BPS;
 let liveDex24h = 0;
+let liveCreatorClaimable = 0;
 let committedVolume = 0;
+let committedProtocolFees = 0;
+let committedCreatorFees = 0;
 let volumeReady = false;
 let snapshotReady = false;
 let swapHistoryReady = false;
@@ -101,6 +110,7 @@ let fetchInFlight: Promise<ProtocolStats> | null = null;
 const livePools = new Map<string, boolean>();
 const claimKeys = new Set<string>();
 const swapKeys = new Set<string>();
+const feeKeys = new Set<string>();
 const liveListeners = new Set<(stats: ProtocolStats) => void>();
 let liveStarted = false;
 let claimsReady = false;
@@ -143,13 +153,10 @@ async function runFetchProtocolStats(
   seedClaimsFromCache();
   seedVolumeFromCache();
   seedSwapPrints();
+  seedFeePrints();
+  seedFeesFromCache();
   const headPromise = arcClient().getBlockNumber();
   const claimsStart = headPromise.then((head) => pullCreatorClaims(head));
-  const feesStart = headPromise.then((head) => {
-    const floor = head > 120_000n ? head - 120_000n : 0n;
-    const from = scannedFeesTo > floor ? scannedFeesTo + 1n : floor;
-    return collectProtocolFees(from, head);
-  });
 
   const [rows, feesHeld, feeBps, head] = await Promise.all([
     readLaunchIndex(),
@@ -192,6 +199,14 @@ async function runFetchProtocolStats(
   };
 
   publish(true);
+
+  const liveFrom = head > FEE_LIVE_LOOKBACK ? head - FEE_LIVE_LOOKBACK : FACTORY_BLOCK;
+  const feeFrom = scannedFeesTo >= liveFrom ? scannedFeesTo + 1n : liveFrom;
+  const feesStart = collectProtocolFees(feeFrom, head, () => publish(true));
+  void readAllCreatorClaimable(creators).then((value) => {
+    liveCreatorClaimable = value;
+    publish(true);
+  });
 
   void claimsStart.then(() => publish(true));
   void feesStart.then((prints) => {
@@ -245,6 +260,8 @@ export function subscribeProtocolStats(
   liveListeners.add(onUpdate);
   seedClaimsFromCache();
   seedSwapPrints();
+  seedFeePrints();
+  seedFeesFromCache();
   const cached = readCachedProtocolStats();
   if (cached) onUpdate(cached);
   seedVolumeFromCache();
@@ -263,7 +280,10 @@ async function startStatsSource() {
     const first = withCreatorFees(fromApi);
     cacheStats(first);
     notifyLive(first);
-    if (!(first.creatorFeesAll > 0)) {
+    if (
+      !(first.creatorFeesAll > 0) ||
+      first.feesAll <= (first.feesHeld ?? 0) + 0.02
+    ) {
       void hydrateCreatorFeesFromChain().then((stats) => {
         if (stats) notifyLive(stats);
       });
@@ -335,11 +355,14 @@ function startLiveStats() {
       if (logs.length === 0) return;
       let added = false;
       for (const log of logs) {
+        const key = `${log.transactionHash}:${log.logIndex}`;
+        if (feeKeys.has(key)) continue;
+        feeKeys.add(key);
         const proto = log.args.protocolQuote ?? 0n;
         if (proto > 0n) {
           const value = Number(formatUnits(proto, USDC_DECIMALS));
           if (value > 0) {
-            feePrintsMem.push({ time: liveNow(), value });
+            feePrintsMem.push({ time: liveNow(), value, key });
             added = true;
           }
         }
@@ -348,11 +371,19 @@ function startLiveStats() {
           log.args.splitQuote ?? 0n,
         );
         if (creatorValue > 0) {
-          creatorFeePrintsMem.push({ time: liveNow(), value: creatorValue });
+          creatorFeePrintsMem.push({
+            time: liveNow(),
+            value: creatorValue,
+            key: `c:${key}`,
+          });
           added = true;
         }
       }
-      if (added) publishLive(false);
+      if (added) {
+        persistFeePrints();
+        commitFees();
+        publishLive(false);
+      }
     },
   });
 
@@ -407,6 +438,30 @@ function seedVolumeFromCache() {
   volumeReady = true;
 }
 
+function seedCommittedFees() {
+  committedProtocolFees = Math.max(committedProtocolFees, SEEDED_PROTOCOL_FEES);
+  committedCreatorFees = Math.max(committedCreatorFees, SEEDED_CREATOR_FEES);
+}
+
+function seedFeesFromCache() {
+  seedCommittedFees();
+  const cached = memoryCache ?? readCachedProtocolStats();
+  if (!cached) return;
+  if (cached.feesAll > (cached.feesHeld ?? 0) + 0.5) {
+    committedProtocolFees = Math.max(committedProtocolFees, cached.feesAll);
+  }
+  if (cached.creatorFeesAll > (cached.creatorFeesHeld ?? 0) + 0.5) {
+    committedCreatorFees = Math.max(committedCreatorFees, cached.creatorFeesAll);
+  }
+}
+
+function commitFees() {
+  const protocol = sumSince(feePrintsMem, 0);
+  const creator = sumSince(creatorFeePrintsMem, 0);
+  if (protocol > committedProtocolFees) committedProtocolFees = protocol;
+  if (creator > committedCreatorFees) committedCreatorFees = creator;
+}
+
 function commitVolume(scanned: number) {
   if (scanned > committedVolume) committedVolume = scanned;
   volumeReady = true;
@@ -453,16 +508,44 @@ async function hydrateCreatorFeesFromChain() {
   try {
     const [rows, head] = await Promise.all([readLaunchIndex(), arcClient().getBlockNumber()]);
     rememberCreatorShare(rows);
-    const floor = head > 200_000n ? head - 200_000n : FACTORY_BLOCK;
-    await collectProtocolFees(floor, head);
+    liveCreators = new Set(
+      rows.map((row) => row.creator.toLowerCase()).filter(Boolean),
+    );
+    seedCommittedFees();
+    const liveFrom = head > FEE_LIVE_LOOKBACK ? head - FEE_LIVE_LOOKBACK : FACTORY_BLOCK;
+    const [claimable] = await Promise.all([
+      readAllCreatorClaimable(liveCreators),
+      collectProtocolFees(liveFrom, head),
+    ]);
+    liveCreatorClaimable = claimable;
+    commitFees();
     const cached = memoryCache;
-    if (!cached || !(sumSince(creatorFeePrintsMem, 0) > 0)) return null;
+    if (!cached) return null;
+    const protocolAccrued = sumSince(feePrintsMem, 0);
+    const creatorAccrued = sumSince(creatorFeePrintsMem, 0);
+    if (
+      !(protocolAccrued > 0 || creatorAccrued > 0 || committedProtocolFees > 0)
+    ) {
+      return null;
+    }
+    const now = liveNow();
+    const claimedAll = cached.claimedAll ?? 0;
     const next = {
       ...cached,
-      creatorFees24h: sumSince(creatorFeePrintsMem, liveNow() - DAY),
-      creatorFeesPrev24h: sumBetween(creatorFeePrintsMem, liveNow() - 2 * DAY, liveNow() - DAY),
-      creatorFeesAll: sumSince(creatorFeePrintsMem, 0),
-      creatorFeesHeld: Math.max(0, sumSince(creatorFeePrintsMem, 0) - (cached.claimedAll ?? 0)),
+      fees24h: sumSince(feePrintsMem, now - DAY),
+      feesPrev24h: sumBetween(feePrintsMem, now - 2 * DAY, now - DAY),
+      feesAll: Math.max(committedProtocolFees, protocolAccrued),
+      creatorFees24h: sumSince(creatorFeePrintsMem, now - DAY),
+      creatorFeesPrev24h: sumBetween(creatorFeePrintsMem, now - 2 * DAY, now - DAY),
+      creatorFeesAll: Math.max(
+        committedCreatorFees,
+        creatorAccrued,
+        claimedAll + liveCreatorClaimable,
+      ),
+      creatorFeesHeld: Math.max(
+        liveCreatorClaimable,
+        Math.max(0, creatorAccrued - claimedAll),
+      ),
     };
     cacheStats(next);
     return next;
@@ -498,6 +581,63 @@ function persistSwapPrints() {
   } catch {
     /* quota */
   }
+}
+
+function seedFeePrints() {
+  if (feePrintsMem.length > 0 || typeof sessionStorage === "undefined") return;
+  try {
+    const raw = sessionStorage.getItem(FEE_PRINTS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { fees?: Print[]; creators?: Print[] };
+    for (const row of parsed.fees ?? []) {
+      if (!row.time || !(row.value > 0)) continue;
+      if (row.key) {
+        if (feeKeys.has(row.key)) continue;
+        feeKeys.add(row.key);
+      }
+      feePrintsMem.push(row);
+    }
+    for (const row of parsed.creators ?? []) {
+      if (!row.time || !(row.value > 0)) continue;
+      creatorFeePrintsMem.push(row);
+    }
+    commitFees();
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistFeePrints() {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      FEE_PRINTS_KEY,
+      JSON.stringify({ fees: feePrintsMem, creators: creatorFeePrintsMem }),
+    );
+  } catch {
+    /* quota */
+  }
+}
+
+async function readAllCreatorClaimable(creators: Set<string>) {
+  const accounts = [...creators].filter((account): account is Address => isAddress(account));
+  if (accounts.length === 0) return 0;
+  const results = await arcClient().multicall({
+    allowFailure: true,
+    contracts: accounts.map((account) => ({
+      address: FEE_DISTRIBUTOR,
+      abi: feeDistributorAbi,
+      functionName: "claimable" as const,
+      args: [account, USDC] as const,
+    })),
+  });
+  let sum = 0;
+  for (const item of results) {
+    if (item.status !== "success") continue;
+    const value = Number(formatUnits(item.result, USDC_DECIMALS));
+    if (value > 0) sum += value;
+  }
+  return sum;
 }
 
 async function pullCreatorClaims(head: bigint) {
@@ -792,47 +932,61 @@ async function stampSwapBlocks(blocks: bigint[], head: bigint) {
   return stamps;
 }
 
-async function collectProtocolFees(fromBlock: bigint, latest: bigint) {
-  const prints: Print[] = [...feePrintsMem];
-  if (fromBlock > latest) return prints;
-  try {
-    const pages = await Promise.all(
-      blockChunks(fromBlock, latest).map(async (chunk) => {
-        try {
-          return await getLogsSplit({
-            address: FEE_DISTRIBUTOR,
-            event: accruedEvent,
-            fromBlock: chunk.start,
-            toBlock: chunk.end,
-          });
-        } catch {
-          return [];
+async function collectProtocolFees(
+  fromBlock: bigint,
+  latest: bigint,
+  onChunk?: () => void,
+) {
+  if (fromBlock > latest) return feePrintsMem;
+  for (const chunk of blockChunks(fromBlock, latest)) {
+    try {
+      const logs = await getLogsSplit({
+        address: FEE_DISTRIBUTOR,
+        event: accruedEvent,
+        fromBlock: chunk.start,
+        toBlock: chunk.end,
+      });
+      if (logs.length > 0) {
+        const stamps = await stampBlocks(logs.map((log) => log.blockNumber));
+        let added = false;
+        for (const log of logs) {
+          const key = `${log.transactionHash}:${log.logIndex}`;
+          if (feeKeys.has(key)) continue;
+          feeKeys.add(key);
+          const time = stamps.get(log.blockNumber) || liveNow();
+          const proto = log.args.protocolQuote ?? 0n;
+          if (proto > 0n) {
+            const value = Number(formatUnits(proto, USDC_DECIMALS));
+            if (value > 0) {
+              feePrintsMem.push({ time, value, key });
+              added = true;
+            }
+          }
+          const creatorValue = creatorShareFromSplit(
+            log.args.token ?? "",
+            log.args.splitQuote ?? 0n,
+          );
+          if (creatorValue > 0) {
+            creatorFeePrintsMem.push({
+              time,
+              value: creatorValue,
+              key: `c:${key}`,
+            });
+            added = true;
+          }
         }
-      }),
-    );
-    const logs = pages.flat();
-    const stamps = await stampBlocks(logs.map((log) => log.blockNumber));
-    for (const log of logs) {
-      const time = stamps.get(log.blockNumber);
-      if (!time) continue;
-      const raw = log.args.protocolQuote ?? 0n;
-      if (raw > 0n) {
-        const value = Number(formatUnits(raw, USDC_DECIMALS));
-        if (value > 0) prints.push({ time, value });
+        if (added) {
+          persistFeePrints();
+          commitFees();
+          onChunk?.();
+        }
       }
-      const creatorValue = creatorShareFromSplit(
-        log.args.token ?? "",
-        log.args.splitQuote ?? 0n,
-      );
-      if (creatorValue > 0) {
-        creatorFeePrintsMem.push({ time, value: creatorValue });
-      }
+      if (chunk.end > scannedFeesTo) scannedFeesTo = chunk.end;
+    } catch {
+      /* keep the next chunk */
     }
-    if (latest > scannedFeesTo) scannedFeesTo = latest;
-  } catch {
-    /* treasury balance is the fallback */
   }
-  return prints;
+  return feePrintsMem;
 }
 
 async function collectCreatorClaims(fromBlock: bigint, latest: bigint) {
@@ -1021,12 +1175,17 @@ function assemble({
   const volumePrev24h = sumBetween(swapPrints, now - 2 * DAY, now - DAY);
   const scannedVolume = sumSince(swapPrints, 0);
   const volumeAll = Math.max(committedVolume, scannedVolume);
-  const accruedAll = sumSince(feePrints, 0);
-  const feesAll = accruedAll > 0 ? Math.max(accruedAll, feesHeld) : feesHeld;
-  const fees24h = accruedAll > 0 ? sumSince(feePrints, now - DAY) : 0;
-  const feesPrev24h = accruedAll > 0
-    ? sumBetween(feePrints, now - 2 * DAY, now - DAY)
-    : 0;
+  const protocolAccrued = sumSince(feePrints, 0);
+  const creatorAccrued = sumSince(creatorFeePrints, 0);
+  const claimedAll = sumSince(claimPrints, 0);
+  const feesAll = Math.max(committedProtocolFees, protocolAccrued);
+  const creatorFeesAll = Math.max(
+    committedCreatorFees,
+    creatorAccrued,
+    claimedAll + liveCreatorClaimable,
+  );
+  const fees24h = sumSince(feePrints, now - DAY);
+  const feesPrev24h = sumBetween(feePrints, now - 2 * DAY, now - DAY);
   const from = resolveFactoryLive(launchTimes);
   const launchPrints = launchTimes.map((time) => ({ time, value: 1 }));
   const volume30m = fillInterval(swapPrints, from, now, HALF_HOUR);
@@ -1049,11 +1208,14 @@ function assemble({
     feesHeld,
     claimed24h: sumSince(claimPrints, now - DAY),
     claimedPrev24h: sumBetween(claimPrints, now - 2 * DAY, now - DAY),
-    claimedAll: sumSince(claimPrints, 0),
+    claimedAll,
     creatorFees24h: sumSince(creatorFeePrints, now - DAY),
     creatorFeesPrev24h: sumBetween(creatorFeePrints, now - 2 * DAY, now - DAY),
-    creatorFeesAll: sumSince(creatorFeePrints, 0),
-    creatorFeesHeld: Math.max(0, sumSince(creatorFeePrints, 0) - sumSince(claimPrints, 0)),
+    creatorFeesAll,
+    creatorFeesHeld: Math.max(
+      liveCreatorClaimable,
+      Math.max(0, creatorAccrued - claimedAll),
+    ),
     volumeDays: volume1h,
     volume30m,
     volume1h,
@@ -1078,8 +1240,18 @@ function cacheStats(stats: ProtocolStats) {
   const prev = memoryCache;
   let next = stats;
   if (next.volumeAll > committedVolume) committedVolume = next.volumeAll;
+  if (next.feesAll > committedProtocolFees) committedProtocolFees = next.feesAll;
+  if (next.creatorFeesAll > committedCreatorFees) {
+    committedCreatorFees = next.creatorFeesAll;
+  }
   if (prev && next.volumeAll < prev.volumeAll) {
     next = { ...next, volumeAll: prev.volumeAll };
+  }
+  if (prev && next.feesAll < prev.feesAll) {
+    next = { ...next, feesAll: prev.feesAll };
+  }
+  if (prev && next.creatorFeesAll < prev.creatorFeesAll) {
+    next = { ...next, creatorFeesAll: prev.creatorFeesAll };
   }
   if (next.volumeAll > 0) next = { ...next, volumeReady: true };
   if (
@@ -1120,7 +1292,6 @@ function cacheStats(stats: ProtocolStats) {
       creatorFees24h: Math.max(stats.creatorFees24h ?? 0, prev.creatorFees24h ?? 0),
       creatorFeesPrev24h: Math.max(stats.creatorFeesPrev24h ?? 0, prev.creatorFeesPrev24h ?? 0),
       creatorFeesAll: prev.creatorFeesAll,
-      creatorFeesHeld: Math.max(stats.creatorFeesHeld ?? 0, prev.creatorFeesHeld ?? 0),
     };
   }
   memoryCache = next;

@@ -93,7 +93,7 @@ async function failoverFetch(input: RequestInfo | URL, init?: RequestInit) {
 }
 
 function deadRpc(body: string) {
-  return /rate limit|too many requests|could not complete this request|no answer was obtained|method not found/i.test(
+  return /rate limit|too many requests|could not complete this request|no answer was obtained|method not found|pruned history|limit exceeded/i.test(
     body,
   );
 }

@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { Route } from "./+types/analytics";
 import { LAUNCH_FACTORY, ZORP_BUYBACK } from "../lib/addresses";
 import { explorerAddress } from "../lib/factory";
-import { useNetwork } from "../lib/use-network";
 import {
   changePct,
   emptyVolumeBars,
@@ -29,7 +28,6 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Analytics() {
-  const { network } = useNetwork();
   const [range, setRange] = useState<"24h" | "all">("all");
   const [chartInterval, setChartInterval] = useState<VolumeInterval>(VOLUME_INTERVALS["30m"]);
   const [stats, setStats] = useState<ProtocolStats | null>(null);
@@ -63,17 +61,12 @@ export default function Analytics() {
               Protocol analytics
             </h1>
             <p className="mt-2 max-w-xl text-[14px] leading-6 text-muted">
-              Live on-chain reporting for Zorp launches on Arc. Volume is USDC
-              swapped through each launch pool. Protocol fees are the 0.5% USDC
-              cut sent to the treasury. Creator fees are the launch-tax USDC
-              accrued to creators. Launches come from the factory.
+              Live on-chain reporting for Zorp launches on Robinhood and Arc.
+              Volume is the pair asset swapped through each launch pool — WETH
+              on Robinhood, USDC on Arc. Protocol fees are the 0.5% cut sent to
+              the treasury. Creator fees are the launch-tax accrued to
+              creators. Launches come from each factory.
             </p>
-            {network.id === "robinhood" ? (
-              <p className="mt-3 rounded-2xl bg-surface px-3 py-2 text-[12px] text-muted ring-1 ring-line">
-                This dashboard is the Arc indexer. Switch to Arc for live
-                protocol totals, or use Home to browse Robinhood launches.
-              </p>
-            ) : null}
             <p className="mt-2 text-[12px] text-muted">
               {stats && !stats.partial
                 ? `Live · updated ${new Date(stats.updatedAt).toLocaleTimeString()} · volume from factory go-live`
@@ -141,7 +134,7 @@ export default function Analytics() {
               value={
                 <AnimatedUsd
                   value={fees}
-                  ready={Boolean(stats)}
+                  ready={Boolean(stats && (fees > 0 || !stats.partial))}
                 />
               }
               hint={
@@ -149,14 +142,14 @@ export default function Analytics() {
                   ? `${formatStatUsd(stats.feesHeld)} held in treasury`
                   : "0.5% USDC swap fee since factory go-live"
               }
-              pending={!stats}
+              pending={!stats || (stats.partial && fees === 0)}
             />
             <Stat
               label="All-time creator fees"
               value={
                 <AnimatedUsd
                   value={claimed}
-                  ready={Boolean(stats)}
+                  ready={Boolean(stats && (claimed > 0 || !stats.partial))}
                 />
               }
               hint={
@@ -164,7 +157,7 @@ export default function Analytics() {
                   ? `${formatStatUsd(stats.creatorFeesHeld)} unclaimed`
                   : "USDC accrued to launch creators since factory go-live"
               }
-              pending={!stats}
+              pending={!stats || (stats.partial && claimed === 0)}
             />
           </div>
         )}

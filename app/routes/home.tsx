@@ -4,7 +4,7 @@ import { socialImageMeta, siteOrigin } from "../lib/site-meta";
 
 const SITE_TITLE = "Zorp : The native launchpad";
 const SITE_DESCRIPTION =
-  "The native launchpad on Arc and Robinhood. Non-custodial tokens, live from block one.";
+  "The native launchpad on Robinhood and Arc. Non-custodial tokens, live from block one.";
 
 export function meta({}: Route.MetaArgs) {
   return [

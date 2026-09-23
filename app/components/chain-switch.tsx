@@ -6,8 +6,8 @@ import { usePrivyReady } from "./app-privy-provider";
 import type { NetworkId } from "../lib/active-network";
 
 const OPTIONS: { id: NetworkId; label: string }[] = [
-  { id: "arc", label: "Arc" },
   { id: "robinhood", label: "Robinhood" },
+  { id: "arc", label: "Arc" },
 ];
 
 export function ChainSwitch() {
