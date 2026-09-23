@@ -16,5 +16,14 @@ export default defineConfig(({ mode }) => {
       "import.meta.env.VITE_PRIVY_APP_ID": JSON.stringify(privyAppId),
       "import.meta.env.VITE_PRIVY_CLIENT_ID": JSON.stringify(privyClientId),
     },
+    server: {
+      proxy: {
+        "/zorp-api": {
+          target: "http://127.0.0.1:8787",
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/zorp-api/, ""),
+        },
+      },
+    },
   };
 });

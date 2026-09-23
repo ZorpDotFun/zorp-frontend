@@ -4,11 +4,11 @@ import type { Route } from "./+types/create";
 import { usePrivyReady } from "../components/app-privy-provider";
 import {
   GRADUATION_MC_USD,
-  LAUNCH_FACTORY,
   TARGET_FDV_USD,
   TOTAL_SUPPLY,
 } from "../lib/addresses";
 import { explorerAddress, readProtocolFeeBps } from "../lib/factory";
+import { useNetwork } from "../lib/use-network";
 import {
   FEE_MODELS,
   PROTOCOL_SWAP_FEE_BPS,
@@ -34,12 +34,14 @@ export function meta({}: Route.MetaArgs) {
     {
       name: "description",
       content:
-        "Launch a token on Arc. 1B supply into a locked Uniswap v4 USDC pool, live from block one.",
+        "Launch a token on Arc or Robinhood. 1B supply into a locked Uniswap v4 pool, live from block one.",
     },
   ];
 }
 
 export default function CreatePage() {
+  const { network } = useNetwork();
+  const pair = network.protocol.pairSymbol;
   const [name, setName] = useState("");
   const [ticker, setTicker] = useState("");
   const [description, setDescription] = useState("");
@@ -106,10 +108,17 @@ export default function CreatePage() {
           Launch token
         </h1>
         <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted">
-          Every launch mints 1,000,000,000 tokens into a locked Uniswap v4
-          USDC pool at a $3,000 FDV. Tradable from the first block. Graduation
-          market cap is $40,000.
+          Every launch mints 1,000,000,000 tokens into a locked Uniswap v4{" "}
+          {pair} pool on {network.shortName} at a $3,000 FDV. Tradable from
+          the first block. Graduation market cap is $40,000.
         </p>
+        {network.protocol.deployed ? null : (
+          <p className="mt-4 rounded-2xl bg-surface px-4 py-3 text-[13px] text-muted ring-1 ring-line">
+            Zorp is not live on Robinhood yet. Broadcast{" "}
+            <span className="text-ink">script/DeployRobinhood.s.sol</span>, then
+            set the <span className="text-ink">VITE_RH_*</span> addresses.
+          </p>
+        )}
 
         <form
           className="mt-8 space-y-5"
@@ -225,8 +234,8 @@ export default function CreatePage() {
 
           <Field label="Paired asset">
             <div className="mt-2 flex h-11 items-center justify-between rounded-2xl bg-surface px-4 text-[13px] text-ink ring-1 ring-line">
-              <span>USDC</span>
-              <span className="text-muted">Arc native pair</span>
+              <span>{pair}</span>
+              <span className="text-muted">{network.protocol.pairHint}</span>
             </div>
           </Field>
 
@@ -247,12 +256,13 @@ export default function CreatePage() {
                 className={`${inputClass} pr-16`}
               />
               <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-[13px] text-muted">
-                USDC
+                {pair}
               </span>
             </div>
             <p className="mt-2 text-[12px] text-muted">
-              Leave at 0 to only deploy. A first buy pulls USDC from your
-              wallet after an approve.
+              Leave at 0 to only deploy. A first buy pulls {pair} from your
+              wallet after an approve
+              {pair === "WETH" ? " (ETH is wrapped if needed)" : ""}.
             </p>
           </div>
 
@@ -273,7 +283,7 @@ export default function CreatePage() {
                 </p>
                 <div className="rounded-2xl bg-canvas px-3 py-3 ring-1 ring-line">
                   <p className="text-[12px] font-medium text-ink">
-                    Zorp protocol fee · {formatTax(protocolBps)} USDC
+                    Zorp protocol fee · {formatTax(protocolBps)} {pair}
                   </p>
                   <p className="mt-1 text-[12px] leading-5 text-muted">
                     Charged on every buy and sell, in the pair asset, on top of
@@ -482,7 +492,8 @@ export default function CreatePage() {
             label="Graduation MC"
             value={`$${GRADUATION_MC_USD.toLocaleString()}`}
           />
-          <Row label="Paired with" value="USDC" />
+          <Row label="Paired with" value={pair} />
+          <Row label="Network" value={network.shortName} />
           <Row label="Fee model" value={FEE_MODELS.find((model) => model.id === feeModel)?.label ?? "Custom"} />
           <Row label="Your tax" value={summary.tax} />
           <Row label="Zorp protocol" value={summary.protocol} />
@@ -494,12 +505,12 @@ export default function CreatePage() {
             label="Factory"
             value={
               <a
-                href={explorerAddress(LAUNCH_FACTORY)}
+                href={explorerAddress(network.protocol.factory)}
                 target="_blank"
                 rel="noreferrer"
                 className="hover:text-yellowell"
               >
-                {shortenAddress(LAUNCH_FACTORY)}
+                {shortenAddress(network.protocol.factory)}
               </a>
             }
           />
@@ -510,6 +521,7 @@ export default function CreatePage() {
 }
 
 function UsdcBalanceGate() {
+  const { network } = useNetwork();
   const privyReady = usePrivyReady();
   const [Balance, setBalance] = useState<ComponentType | null>(null);
 
@@ -528,7 +540,7 @@ function UsdcBalanceGate() {
   }, [privyReady]);
 
   if (!Balance) {
-    return <span className="text-[12px] text-muted">USDC</span>;
+    return <span className="text-[12px] text-muted">{network.protocol.pairSymbol}</span>;
   }
   return <Balance />;
 }

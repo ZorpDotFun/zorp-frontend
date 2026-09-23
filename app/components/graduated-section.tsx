@@ -5,6 +5,8 @@ import {
   formatChange,
   formatCompact,
   formatUsd,
+  tokenAth,
+  tokenMarketCap,
   type Token,
 } from "../lib/tokens";
 import { SocialIcons } from "./social-icons";
@@ -49,7 +51,7 @@ export function GraduatedSection({
           </span>
         </div>
         <p className="mt-1 text-[13px] text-muted">
-          Reached $40k market cap. Still trading on the same Uniswap v4 USDC pool.
+          Reached $40k market cap. Still trading on the same Uniswap v4 pool.
         </p>
         <div className="mt-4 flex items-center gap-3">
           <label className="relative block min-w-0 flex-1 max-w-xl">
@@ -190,7 +192,7 @@ function GraduatedCard({ token }: { token: Token }) {
           </div>
           <div className="text-right">
             <p className="text-[14px] font-bold text-ink">
-              {formatCompact(token.mcap)}
+              {formatCompact(tokenMarketCap(token))}
             </p>
             <p
               className={`text-[11px] font-medium ${up ? "text-up" : "text-down"}`}
@@ -200,11 +202,17 @@ function GraduatedCard({ token }: { token: Token }) {
           </div>
         </div>
 
-        <dl className="mt-auto grid grid-cols-3 gap-1 border-t border-line pt-3 text-[10px] text-muted">
+        <dl className="mt-auto grid grid-cols-2 gap-1 border-t border-line pt-3 text-[10px] text-muted sm:grid-cols-4">
           <div>
             <dt>Mcap</dt>
             <dd className="mt-0.5 font-medium text-ink">
-              {formatUsd(token.mcap)}
+              {formatUsd(tokenMarketCap(token))}
+            </dd>
+          </div>
+          <div>
+            <dt>ATH</dt>
+            <dd className="mt-0.5 font-medium text-ink">
+              {formatUsd(tokenAth(token))}
             </dd>
           </div>
           <div>

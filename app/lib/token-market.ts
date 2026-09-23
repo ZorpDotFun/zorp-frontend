@@ -1,17 +1,13 @@
 import { erc20Abi, formatUnits, isAddress, parseAbiItem, type Address } from "viem";
-import {
-  FEE_DISTRIBUTOR,
-  LAUNCH_FACTORY,
-  LAUNCH_LOCKER,
-  TOTAL_SUPPLY,
-  V4_POOL_MANAGER,
-  V4_UNIVERSAL_ROUTER,
-} from "./addresses";
-import { publicClient } from "./factory";
+import { TOTAL_SUPPLY } from "./addresses";
+import { getPublicClient } from "./factory";
+import { protocolOf } from "./networks";
 import { launchPoolId, usdPerTokenFromSqrt } from "./pool-price";
 
 const TOKEN_DECIMALS = 18;
-const USDC_DECIMALS = 6;
+function pairDecimals() {
+  return protocolOf().pairDecimals;
+}
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 const swapEvent = parseAbiItem(
@@ -58,7 +54,7 @@ export async function fetchRecentTrades(
 ): Promise<MarketTrade[]> {
   try {
     const logs = await collectLogs({
-      address: V4_POOL_MANAGER,
+      address: protocolOf().v4PoolManager,
       event: swapEvent,
       args: { id: launchPoolId(token) },
       lookback,
@@ -72,7 +68,7 @@ export async function fetchRecentTrades(
     const senders = new Map<HexString, string>();
     await Promise.all(
       hashes.map(async (hash) => {
-        const tx = await publicClient.getTransaction({ hash });
+        const tx = await getPublicClient().getTransaction({ hash });
         senders.set(hash, tx.from);
       }),
     );
@@ -88,7 +84,7 @@ export async function fetchRecentTrades(
           trader: senders.get(log.transactionHash) ?? log.args.sender ?? "",
           buy: tokenDelta > 0n,
           tokenAmount: Number(formatUnits(abs(tokenDelta), TOKEN_DECIMALS)),
-          usdcAmount: Number(formatUnits(abs(usdcDelta), USDC_DECIMALS)),
+          usdcAmount: Number(formatUnits(abs(usdcDelta), pairDecimals())),
           price: usdPerTokenFromSqrt(log.args.sqrtPriceX96 ?? 0n, tokenIsCurrency0),
           time: (stamps.get(log.blockNumber) ?? 0) * 1000,
         };
@@ -105,12 +101,13 @@ export async function fetchHolders(
   creator?: string,
   extra: string[] = [],
 ): Promise<MarketHolder[]> {
+  const protocol = protocolOf();
   const seen = new Set<string>([
-    V4_POOL_MANAGER.toLowerCase(),
-    LAUNCH_LOCKER.toLowerCase(),
-    LAUNCH_FACTORY.toLowerCase(),
-    V4_UNIVERSAL_ROUTER.toLowerCase(),
-    FEE_DISTRIBUTOR.toLowerCase(),
+    protocol.v4PoolManager.toLowerCase(),
+    protocol.locker.toLowerCase(),
+    protocol.factory.toLowerCase(),
+    protocol.v4UniversalRouter.toLowerCase(),
+    protocol.distributor.toLowerCase(),
     ...(creator ? [creator.toLowerCase()] : []),
     ...extra.map((value) => value.toLowerCase()).filter(Boolean),
   ]);
@@ -153,7 +150,7 @@ export async function fetchHolders(
 
 async function readBalances(token: Address, addresses: Address[]) {
   try {
-    const results = await publicClient.multicall({
+    const results = await getPublicClient().multicall({
       allowFailure: true,
       contracts: addresses.map((account) => ({
         address: token,
@@ -169,7 +166,7 @@ async function readBalances(token: Address, addresses: Address[]) {
     return Promise.all(
       addresses.map(async (account) => {
         try {
-          return await publicClient.readContract({
+          return await getPublicClient().readContract({
             address: token,
             abi: erc20Abi,
             functionName: "balanceOf",
@@ -184,12 +181,13 @@ async function readBalances(token: Address, addresses: Address[]) {
 }
 
 function holderLabel(address: string, creator?: string) {
+  const protocol = protocolOf();
   const value = address.toLowerCase();
-  if (value === V4_POOL_MANAGER.toLowerCase()) return "Pool";
-  if (value === LAUNCH_LOCKER.toLowerCase()) return "Locked LP";
-  if (value === LAUNCH_FACTORY.toLowerCase()) return "Factory";
-  if (value === V4_UNIVERSAL_ROUTER.toLowerCase()) return "Router";
-  if (value === FEE_DISTRIBUTOR.toLowerCase()) return "Fees";
+  if (value === protocol.v4PoolManager.toLowerCase()) return "Pool";
+  if (value === protocol.locker.toLowerCase()) return "Locked LP";
+  if (value === protocol.factory.toLowerCase()) return "Factory";
+  if (value === protocol.v4UniversalRouter.toLowerCase()) return "Router";
+  if (value === protocol.distributor.toLowerCase()) return "Fees";
   if (creator && value === creator.toLowerCase()) return "Creator";
   return null;
 }
@@ -209,16 +207,16 @@ async function collectLogs<T>({
   newestFirst?: boolean;
   limit?: number;
 }) {
-  const latest = await publicClient.getBlockNumber();
+  const latest = await getPublicClient().getBlockNumber();
   const fromBlock = latest > lookback ? latest - lookback : 0n;
   const chunk = 10_000n;
-  const pages: Awaited<ReturnType<typeof publicClient.getLogs>>[] = [];
+  const pages: any[] = [];
 
   if (newestFirst) {
     for (let end = latest; end >= fromBlock; end -= chunk) {
       const start = end + 1n - chunk < fromBlock ? fromBlock : end + 1n - chunk;
       pages.push(
-        await publicClient.getLogs({
+        await getPublicClient().getLogs({
           address,
           event: event as never,
           args: args as never,
@@ -235,7 +233,7 @@ async function collectLogs<T>({
   for (let start = fromBlock; start <= latest; start += chunk) {
     const end = start + chunk - 1n > latest ? latest : start + chunk - 1n;
     pages.push(
-      await publicClient.getLogs({
+      await getPublicClient().getLogs({
         address,
         event: event as never,
         args: args as never,
@@ -253,7 +251,7 @@ async function blockTimes(blocks: bigint[]) {
   const stamps = new Map<bigint, number>();
   await Promise.all(
     unique.map(async (blockNumber) => {
-      const block = await publicClient.getBlock({ blockNumber });
+      const block = await getPublicClient().getBlock({ blockNumber });
       stamps.set(blockNumber, Number(block.timestamp));
     }),
   );

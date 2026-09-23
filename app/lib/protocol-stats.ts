@@ -1,6 +1,7 @@
 import { erc20Abi, formatUnits, parseAbiItem, type Address } from "viem";
+import { fetchApiJson } from "./api";
 import { FEE_DISTRIBUTOR, LAUNCH_FACTORY, USDC, V4_POOL_MANAGER, ZORP_BUYBACK } from "./addresses";
-import { launchFactoryAbi, publicClient, readProtocolFeeBps } from "./factory";
+import { feeDistributorAbi, launchFactoryAbi, publicClient, readProtocolFeeBps } from "./factory";
 import { PROTOCOL_SWAP_FEE_BPS } from "./fee-models";
 import { launchPoolId } from "./pool-price";
 
@@ -11,7 +12,7 @@ const HALF_HOUR = 1_800;
 const LOG_CHUNK = 4_000n;
 const CLAIM_RECENT = 80_000n;
 const CLAIM_FLOOR = 200_000n;
-const CACHE_KEY = "zorp-protocol-stats-v2";
+const CACHE_KEY = "zorp-protocol-stats-v3";
 const SWAP_PRINTS_KEY = "zorp-swap-prints-v1";
 /** Arc mainstage window on 16 Sep 2026 — factory cannot be earlier than this UTC day. */
 const FACTORY_DAY = Math.floor(Date.UTC(2026, 8, 16) / 1000);
@@ -51,6 +52,10 @@ export type ProtocolStats = {
   claimed24h: number;
   claimedPrev24h: number;
   claimedAll: number;
+  creatorFees24h: number;
+  creatorFeesPrev24h: number;
+  creatorFeesAll: number;
+  creatorFeesHeld: number;
   volumeDays: DayBucket[];
   volume30m: DayBucket[];
   volume1h: DayBucket[];
@@ -63,12 +68,21 @@ export type ProtocolStats = {
 };
 
 type Print = { time: number; value: number; account?: string; key?: string };
-type LaunchRow = { address: Address; creator: string; launchedAt: number };
+type LaunchRow = {
+  address: Address;
+  creator: string;
+  launchedAt: number;
+  creatorBps: number;
+  tributeBps: number;
+  tributeToCreator: boolean;
+};
 
 let memoryCache: ProtocolStats | null = null;
 let swapPrintsMem: Print[] = [];
 let feePrintsMem: Print[] = [];
 let claimPrintsMem: Print[] = [];
+let creatorFeePrintsMem: Print[] = [];
+const liveCreatorShare = new Map<string, number>();
 let scannedTo = 0n;
 let scannedClaimsTo = 0n;
 let scannedFeesTo = 0n;
@@ -118,6 +132,14 @@ export async function fetchProtocolStats(
 async function runFetchProtocolStats(
   onUpdate?: (stats: ProtocolStats) => void,
 ): Promise<ProtocolStats> {
+  const fromApi = await fetchApiJson<ProtocolStats>("/stats");
+  if (fromApi && typeof fromApi.updatedAt === "number") {
+    const next = withCreatorFees(fromApi);
+    cacheStats(next);
+    onUpdate?.(next);
+    notifyLive(next);
+    return next;
+  }
   seedClaimsFromCache();
   seedVolumeFromCache();
   seedSwapPrints();
@@ -145,6 +167,7 @@ async function runFetchProtocolStats(
   liveLaunchTimes = launchTimes;
   liveFactoryAt = resolveFactoryLive(launchTimes);
   rememberLaunchPools(tokens);
+  rememberCreatorShare(rows);
   liveCreators = creators;
   liveFeesHeld = feesHeld;
   liveFeeBps = feeBps;
@@ -154,6 +177,7 @@ async function runFetchProtocolStats(
       swapPrints: swapPrintsMem,
       feePrints: feePrintsMem,
       claimPrints: claimPrintsMem,
+      creatorFeePrints: creatorFeePrintsMem,
       dex24h: liveDex24h,
       launchTimes: liveLaunchTimes,
       creators: liveCreators,
@@ -224,11 +248,35 @@ export function subscribeProtocolStats(
   seedVolumeFromCache();
   if (!liveStarted) {
     liveStarted = true;
-    startLiveStats();
+    void startStatsSource();
   }
   return () => {
     liveListeners.delete(onUpdate);
   };
+}
+
+async function startStatsSource() {
+  const fromApi = await fetchApiJson<ProtocolStats>("/stats");
+  if (fromApi && typeof fromApi.updatedAt === "number") {
+    const first = withCreatorFees(fromApi);
+    cacheStats(first);
+    notifyLive(first);
+    if (!(first.creatorFeesAll > 0)) {
+      void hydrateCreatorFeesFromChain().then((stats) => {
+        if (stats) notifyLive(stats);
+      });
+    }
+    window.setInterval(() => {
+      void fetchApiJson<ProtocolStats>("/stats").then((next) => {
+        if (!next || typeof next.updatedAt !== "number") return;
+        const stats = withCreatorFees(next);
+        cacheStats(stats);
+        notifyLive(stats);
+      });
+    }, 8_000);
+    return;
+  }
+  startLiveStats();
 }
 
 function notifyLive(stats: ProtocolStats) {
@@ -241,6 +289,7 @@ function publishLive(partial: boolean) {
     swapPrints: swapPrintsMem,
     feePrints: feePrintsMem,
     claimPrints: claimPrintsMem,
+    creatorFeePrints: creatorFeePrintsMem,
     dex24h: liveDex24h,
     launchTimes: liveLaunchTimes,
     creators: liveCreators,
@@ -284,12 +333,22 @@ function startLiveStats() {
       if (logs.length === 0) return;
       let added = false;
       for (const log of logs) {
-        const raw = log.args.protocolQuote ?? 0n;
-        if (raw === 0n) continue;
-        const value = Number(formatUnits(raw, USDC_DECIMALS));
-        if (!(value > 0)) continue;
-        feePrintsMem.push({ time: liveNow(), value });
-        added = true;
+        const proto = log.args.protocolQuote ?? 0n;
+        if (proto > 0n) {
+          const value = Number(formatUnits(proto, USDC_DECIMALS));
+          if (value > 0) {
+            feePrintsMem.push({ time: liveNow(), value });
+            added = true;
+          }
+        }
+        const creatorValue = creatorShareFromSplit(
+          log.args.token ?? "",
+          log.args.splitQuote ?? 0n,
+        );
+        if (creatorValue > 0) {
+          creatorFeePrintsMem.push({ time: liveNow(), value: creatorValue });
+          added = true;
+        }
       }
       if (added) publishLive(false);
     },
@@ -317,6 +376,7 @@ async function refreshLiveClaims() {
     liveLaunchTimes = rows.map((row) => row.launchedAt);
     liveFactoryAt = resolveFactoryLive(liveLaunchTimes);
     rememberLaunchPools(rows.map((row) => row.address));
+    rememberCreatorShare(rows);
     liveCreators = new Set(
       rows.map((row) => row.creator.toLowerCase()).filter(Boolean),
     );
@@ -353,6 +413,55 @@ function commitVolume(scanned: number) {
 function rememberLaunchPools(tokens: Address[]) {
   for (const token of tokens) {
     livePools.set(launchPoolId(token).toLowerCase(), token.toLowerCase() < USDC.toLowerCase());
+  }
+}
+
+function rememberCreatorShare(rows: LaunchRow[]) {
+  for (const row of rows) {
+    const tributeShare = row.tributeToCreator ? row.tributeBps : 0;
+    liveCreatorShare.set(row.address.toLowerCase(), row.creatorBps + tributeShare);
+  }
+}
+
+function creatorShareFromSplit(token: string, splitQuote: bigint) {
+  if (splitQuote === 0n) return 0;
+  const bps = liveCreatorShare.get(token.toLowerCase()) ?? 10_000;
+  if (bps <= 0) return 0;
+  const value = Number(formatUnits((splitQuote * BigInt(bps)) / 10_000n, USDC_DECIMALS));
+  return value > 0 ? value : 0;
+}
+
+function withCreatorFees(stats: ProtocolStats): ProtocolStats {
+  const creatorFeesAll = stats.creatorFeesAll ?? 0;
+  const claimedAll = stats.claimedAll ?? 0;
+  return {
+    ...stats,
+    creatorFees24h: stats.creatorFees24h ?? 0,
+    creatorFeesPrev24h: stats.creatorFeesPrev24h ?? 0,
+    creatorFeesAll,
+    creatorFeesHeld: stats.creatorFeesHeld ?? Math.max(0, creatorFeesAll - claimedAll),
+  };
+}
+
+async function hydrateCreatorFeesFromChain() {
+  try {
+    const [rows, head] = await Promise.all([readLaunchIndex(), publicClient.getBlockNumber()]);
+    rememberCreatorShare(rows);
+    const floor = head > 200_000n ? head - 200_000n : FACTORY_BLOCK;
+    await collectProtocolFees(floor, head);
+    const cached = memoryCache;
+    if (!cached || !(sumSince(creatorFeePrintsMem, 0) > 0)) return null;
+    const next = {
+      ...cached,
+      creatorFees24h: sumSince(creatorFeePrintsMem, liveNow() - DAY),
+      creatorFeesPrev24h: sumBetween(creatorFeePrintsMem, liveNow() - 2 * DAY, liveNow() - DAY),
+      creatorFeesAll: sumSince(creatorFeePrintsMem, 0),
+      creatorFeesHeld: Math.max(0, sumSince(creatorFeePrintsMem, 0) - (cached.claimedAll ?? 0)),
+    };
+    cacheStats(next);
+    return next;
+  } catch {
+    return null;
   }
 }
 
@@ -513,25 +622,50 @@ async function readLaunchIndex(): Promise<LaunchRow[]> {
     ),
   );
 
-  const launches = await Promise.all(
-    addresses.map((address) =>
-      publicClient.readContract({
-        address: LAUNCH_FACTORY,
-        abi: launchFactoryAbi,
-        functionName: "launches",
-        args: [address],
-      }),
+  const [launches, feeLaunches] = await Promise.all([
+    Promise.all(
+      addresses.map((address) =>
+        publicClient.readContract({
+          address: LAUNCH_FACTORY,
+          abi: launchFactoryAbi,
+          functionName: "launches",
+          args: [address],
+        }),
+      ),
     ),
-  );
+    Promise.all(
+      addresses.map((address) =>
+        publicClient
+          .readContract({
+            address: FEE_DISTRIBUTOR,
+            abi: feeDistributorAbi,
+            functionName: "launches",
+            args: [address],
+          })
+          .catch(() => null),
+      ),
+    ),
+  ]);
 
   return addresses.flatMap((address, index) => {
     const launch = launches[index];
     if (!launch[10]) return [];
+    const fees = feeLaunches[index]?.[4];
+    const tribute = feeLaunches[index]?.[3] ?? "";
+    const tributeBps = fees?.tributeBps ?? 0;
+    const creator = launch[1];
     return [
       {
         address,
-        creator: launch[1],
+        creator,
         launchedAt: Number(launch[6]),
+        creatorBps: fees?.creatorBps ?? 10_000,
+        tributeBps,
+        tributeToCreator:
+          tributeBps > 0 &&
+          (!tribute ||
+            tribute === "0x0000000000000000000000000000000000000000" ||
+            tribute.toLowerCase() === creator.toLowerCase()),
       },
     ];
   });
@@ -675,10 +809,19 @@ async function collectProtocolFees(fromBlock: bigint, latest: bigint) {
     const stamps = await stampBlocks(logs.map((log) => log.blockNumber));
     for (const log of logs) {
       const time = stamps.get(log.blockNumber);
+      if (!time) continue;
       const raw = log.args.protocolQuote ?? 0n;
-      if (!time || raw === 0n) continue;
-      const value = Number(formatUnits(raw, USDC_DECIMALS));
-      if (value > 0) prints.push({ time, value });
+      if (raw > 0n) {
+        const value = Number(formatUnits(raw, USDC_DECIMALS));
+        if (value > 0) prints.push({ time, value });
+      }
+      const creatorValue = creatorShareFromSplit(
+        log.args.token ?? "",
+        log.args.splitQuote ?? 0n,
+      );
+      if (creatorValue > 0) {
+        creatorFeePrintsMem.push({ time, value: creatorValue });
+      }
     }
     if (latest > scannedFeesTo) scannedFeesTo = latest;
   } catch {
@@ -849,6 +992,7 @@ function assemble({
   swapPrints,
   feePrints,
   claimPrints,
+  creatorFeePrints,
   dex24h,
   launchTimes,
   creators,
@@ -860,6 +1004,7 @@ function assemble({
   swapPrints: Print[];
   feePrints: Print[];
   claimPrints: Print[];
+  creatorFeePrints: Print[];
   dex24h: number;
   launchTimes: number[];
   creators: Set<string>;
@@ -903,6 +1048,10 @@ function assemble({
     claimed24h: sumSince(claimPrints, now - DAY),
     claimedPrev24h: sumBetween(claimPrints, now - 2 * DAY, now - DAY),
     claimedAll: sumSince(claimPrints, 0),
+    creatorFees24h: sumSince(creatorFeePrints, now - DAY),
+    creatorFeesPrev24h: sumBetween(creatorFeePrints, now - 2 * DAY, now - DAY),
+    creatorFeesAll: sumSince(creatorFeePrints, 0),
+    creatorFeesHeld: Math.max(0, sumSince(creatorFeePrints, 0) - sumSince(claimPrints, 0)),
     volumeDays: volume1h,
     volume30m,
     volume1h,
@@ -963,6 +1112,15 @@ function cacheStats(stats: ProtocolStats) {
       claimedAll: prev.claimedAll,
     };
   }
+  if (prev && (stats.creatorFeesAll ?? 0) < (prev.creatorFeesAll ?? 0)) {
+    next = {
+      ...next,
+      creatorFees24h: Math.max(stats.creatorFees24h ?? 0, prev.creatorFees24h ?? 0),
+      creatorFeesPrev24h: Math.max(stats.creatorFeesPrev24h ?? 0, prev.creatorFeesPrev24h ?? 0),
+      creatorFeesAll: prev.creatorFeesAll,
+      creatorFeesHeld: Math.max(stats.creatorFeesHeld ?? 0, prev.creatorFeesHeld ?? 0),
+    };
+  }
   memoryCache = next;
   try {
     sessionStorage.setItem(CACHE_KEY, JSON.stringify(next));
@@ -1001,10 +1159,8 @@ function fillInterval(
   interval: VolumeInterval,
 ): DayBucket[] {
   const floor = from >= FACTORY_DAY ? from : FACTORY_LIVE_FALLBACK;
-  let start = alignDown(floor, interval);
+  const start = alignDown(floor, interval);
   const end = alignDown(Math.max(now, start), interval);
-  const maxSpan = 21 * DAY;
-  if (end - start > maxSpan) start = alignDown(end - maxSpan, interval);
   const buckets = new Map<number, number>();
   for (const row of rows) {
     if (row.time < start) continue;

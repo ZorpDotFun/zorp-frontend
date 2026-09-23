@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { Route } from "./+types/analytics";
 import { LAUNCH_FACTORY, ZORP_BUYBACK } from "../lib/addresses";
 import { explorerAddress } from "../lib/factory";
+import { useNetwork } from "../lib/use-network";
 import {
   changePct,
   emptyVolumeBars,
@@ -28,6 +29,7 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Analytics() {
+  const { network } = useNetwork();
   const [range, setRange] = useState<"24h" | "all">("all");
   const [chartInterval, setChartInterval] = useState<VolumeInterval>(VOLUME_INTERVALS["30m"]);
   const [stats, setStats] = useState<ProtocolStats | null>(null);
@@ -49,10 +51,10 @@ export default function Analytics() {
   const volume = stats?.volumeAll ?? 0;
   const launches = range === "24h" ? (stats?.launches24h ?? 0) : (stats?.launchesAll ?? 0);
   const fees = range === "24h" ? (stats?.fees24h ?? 0) : (stats?.feesAll ?? 0);
-  const claimed = range === "24h" ? (stats?.claimed24h ?? 0) : (stats?.claimedAll ?? 0);
+  const claimed = range === "24h" ? (stats?.creatorFees24h ?? 0) : (stats?.creatorFeesAll ?? 0);
   const launchDelta = changePct(stats?.launches24h ?? 0, stats?.launchesPrev24h ?? 0);
   const feesDelta = changePct(stats?.fees24h ?? 0, stats?.feesPrev24h ?? 0);
-  const claimedDelta = changePct(stats?.claimed24h ?? 0, stats?.claimedPrev24h ?? 0);
+  const claimedDelta = changePct(stats?.creatorFees24h ?? 0, stats?.creatorFeesPrev24h ?? 0);
 
   return (
     <main className="mx-auto max-w-[1180px] space-y-5 px-4 py-10 sm:px-6">
@@ -65,9 +67,15 @@ export default function Analytics() {
             <p className="mt-2 max-w-xl text-[14px] leading-6 text-muted">
               Live on-chain reporting for Zorp launches on Arc. Volume is USDC
               swapped through each launch pool. Protocol fees are the 0.5% USDC
-              cut sent to the treasury. Creator claims are USDC pulled by
-              launch creators. Launches come from the factory.
+              cut sent to the treasury. Creator fees are the launch-tax USDC
+              accrued to creators. Launches come from the factory.
             </p>
+            {network.id === "robinhood" ? (
+              <p className="mt-3 rounded-2xl bg-surface px-3 py-2 text-[12px] text-muted ring-1 ring-line">
+                This dashboard is the Arc indexer. Switch to Arc for live
+                protocol totals, or use Home to browse Robinhood launches.
+              </p>
+            ) : null}
             <p className="mt-2 text-[12px] text-muted">
               {stats && !stats.partial
                 ? `Live · updated ${new Date(stats.updatedAt).toLocaleTimeString()} · volume from factory go-live`
@@ -107,14 +115,14 @@ export default function Analytics() {
         ) : (
           <div className="mt-8 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             <Stat
-              label="Protocol volume"
+              label="All-time volume"
               value={
                 <AnimatedUsd
                   value={volume}
                   ready={Boolean(stats?.volumeReady || volume > 0)}
                 />
               }
-              hint="Lifetime USDC swapped across all Zorp pools"
+              hint="USDC swapped across all Zorp pools since factory go-live"
               pending={!stats || !(stats.volumeReady || volume > 0)}
             />
             <Stat
@@ -144,24 +152,31 @@ export default function Analytics() {
               pending={!stats}
             />
             <Stat
-              label={range === "24h" ? "24h creator claims" : "Creator claims"}
+              label={range === "24h" ? "24h creator fees" : "Creator fees"}
               value={stats ? formatStatUsd(claimed) : "—"}
               delta={stats && range === "24h" ? claimedDelta : null}
-              hint={range === "24h" ? "from prior 24h" : "USDC claimed by launch creators"}
+              hint={
+                range === "24h"
+                  ? "from prior 24h"
+                  : stats && stats.creatorFeesHeld > 0
+                    ? `${formatStatUsd(stats.creatorFeesHeld)} unclaimed`
+                    : "USDC accrued to launch creators"
+              }
               pending={!stats}
             />
           </div>
         )}
 
         <p className="mt-8 text-[12px] text-muted">
-          Volume is the lifetime USDC notional swapped through every Zorp
-          pool. The 24h toggle only applies to launches, fees, and claims.
+          Volume is always all-time USDC notional swapped through every Zorp
+          pool since factory go-live. The 24h toggle only applies to launches,
+          fees, and creator fees.
         </p>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <BarCard
-          title="Trading volume"
+          title="All-time volume"
           value={
             <AnimatedUsd
               value={volume}
@@ -171,9 +186,10 @@ export default function Analytics() {
           }
           hint={
             chartInterval === VOLUME_INTERVALS["30m"]
-              ? "USDC swapped in Zorp pools since factory go-live, 30-minute UTC bars."
-              : "USDC swapped in Zorp pools since factory go-live, 1-hour UTC bars."
+              ? "All-time USDC swapped in Zorp pools since factory go-live, 30-minute UTC bars."
+              : "All-time USDC swapped in Zorp pools since factory go-live, 1-hour UTC bars."
           }
+          lifetime={volume}
           days={
             chartInterval === VOLUME_INTERVALS["30m"]
               ? (stats?.volume30m ?? emptyVolumeBars(VOLUME_INTERVALS["30m"]))
@@ -295,6 +311,7 @@ function BarCard({
   hint,
   days,
   money,
+  lifetime,
   interval = VOLUME_INTERVALS["30m"],
   onInterval,
 }: {
@@ -303,11 +320,14 @@ function BarCard({
   hint: string;
   days: DayBucket[];
   money?: boolean;
+  lifetime?: number;
   interval?: VolumeInterval;
   onInterval?: (next: VolumeInterval) => void;
 }) {
   const max = Math.max(...days.map((day) => day.value), 0);
-  const total = days.reduce((sum, day) => sum + day.value, 0);
+  const total = lifetime && lifetime > 0
+    ? lifetime
+    : days.reduce((sum, day) => sum + day.value, 0);
   const dense = days.length > 24;
   const [hover, setHover] = useState<number | null>(null);
   const active = hover !== null ? days[hover] : null;

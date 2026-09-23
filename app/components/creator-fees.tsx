@@ -7,7 +7,7 @@ import {
 } from "@privy-io/react-auth";
 import { useEffect, useState } from "react";
 import { formatUnits, type Address } from "viem";
-import { USDC_DECIMALS } from "../lib/addresses";
+import { protocolOf } from "../lib/networks";
 import {
   claimCreatorFees,
   explorerAddress,
@@ -201,8 +201,9 @@ function CreatorClaim({
 
 function formatClaimable(raw: bigint | null) {
   if (raw == null) return "…";
-  return `${Number(formatUnits(raw, USDC_DECIMALS)).toLocaleString("en-US", {
+  const protocol = protocolOf();
+  return `${Number(formatUnits(raw, protocol.pairDecimals)).toLocaleString("en-US", {
     minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
-  })} USDC`;
+    maximumFractionDigits: protocol.pairDecimals > 6 ? 6 : 2,
+  })} ${protocol.pairSymbol}`;
 }

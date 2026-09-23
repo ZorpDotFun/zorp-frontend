@@ -1,6 +1,6 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import type { ReactNode } from "react";
-import { arcChain } from "../lib/chains";
+import { arcChain, robinhoodChain } from "../lib/chains";
 import { evmWallets } from "../lib/evm-wallets";
 
 export default function PrivyRoot({ children }: { children: ReactNode }) {
@@ -14,7 +14,7 @@ export default function PrivyRoot({ children }: { children: ReactNode }) {
       {...(clientId ? { clientId } : {})}
       config={{
         defaultChain: arcChain,
-        supportedChains: [arcChain],
+        supportedChains: [arcChain, robinhoodChain],
         loginMethods: ["wallet"],
         appearance: {
           theme: "dark",

@@ -5,6 +5,7 @@ import {
   formatChange,
   formatUsd,
   shortenAddress,
+  tokenAth,
   tokenMarketCap,
   type Token,
 } from "../lib/tokens";
@@ -20,7 +21,7 @@ type SortKey =
   | "vol-desc"
   | "vol-asc";
 type WindowKey = "all" | "1h" | "24h" | "7d";
-type PairKey = "all" | "USDC";
+type PairKey = "all" | "USDC" | "WETH";
 type MomentumKey = "all" | "gainers" | "losers";
 type QuickKey = "buys" | "newest" | "oldest" | "mcap" | "volume";
 
@@ -235,6 +236,7 @@ export function ExploreSection({
           [
             ["all", "All pairs"],
             ["USDC", "USDC"],
+            ["WETH", "WETH"],
           ] as const
         ).map(([key, label]) => (
           <Chip key={key} active={pair === key} onClick={() => setPair(key)}>
@@ -351,6 +353,9 @@ function ExploreCard({ token }: { token: Token }) {
             {formatChange(token.change24h)}
           </span>
         </div>
+        <p className="mt-1 text-[11px] text-muted">
+          ATH <span className="font-medium text-ink">{formatUsd(tokenAth(token))}</span>
+        </p>
         <GraduationMeter
           mc={tokenMarketCap(token)}
           address={token.address}

@@ -8,7 +8,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { formatUnits, type Address } from "viem";
-import { USDC_DECIMALS } from "../lib/addresses";
+import { useNetwork } from "../lib/use-network";
 import { explorerTx } from "../lib/factory";
 import { openWalletAuth } from "../lib/privy-wallet";
 import { requestMarketRefresh, type MarketTrade } from "../lib/token-market";
@@ -30,6 +30,9 @@ export function TokenTrade({
   tokenIsCurrency0: boolean;
   priceUsd: number;
 }) {
+  const { network } = useNetwork();
+  const pairDecimals = network.protocol.pairDecimals;
+  const pairSymbol = network.protocol.pairSymbol;
   const privyReady = usePrivyReady();
   const [buying, setBuying] = useState(true);
   const [pay, setPay] = useState("");
@@ -76,7 +79,7 @@ export function TokenTrade({
   }, [amountIn, buying, token, tokenIsCurrency0]);
 
   const receive = quoted
-    ? Number(formatUnits(quoted, buying ? TOKEN_DECIMALS : USDC_DECIMALS))
+    ? Number(formatUnits(quoted, buying ? TOKEN_DECIMALS : pairDecimals))
     : 0;
   const payUsd = buying
     ? Number(pay || 0)
@@ -90,7 +93,7 @@ export function TokenTrade({
         value={pay}
         onChange={setPay}
         usd={payUsd}
-        symbol={buying ? "USDC" : ticker}
+        symbol={buying ? pairSymbol : ticker}
         balanceSlot={
           privyReady ? (
             <PayBalance
@@ -123,7 +126,7 @@ export function TokenTrade({
         label={buying ? "You receive" : "You get"}
         value={quoting ? "…" : receive ? formatReceive(receive, buying) : "0"}
         usd={receiveUsd}
-        symbol={buying ? ticker : "USDC"}
+        symbol={buying ? ticker : pairSymbol}
         readOnly
         balanceSlot={
           privyReady ? (
@@ -214,6 +217,7 @@ function PayBalance({
   token: string;
   onMax: (value: string) => void;
 }) {
+  const { network } = useNetwork();
   const { authenticated } = usePrivy();
   const { wallets } = useWallets();
   const address = wallets[0]?.address as Address | undefined;
@@ -234,7 +238,7 @@ function PayBalance({
       type="button"
       onClick={() => {
         if (raw == null) return;
-        onMax(formatUnits(raw, buying ? USDC_DECIMALS : TOKEN_DECIMALS));
+        onMax(formatUnits(raw, buying ? network.protocol.pairDecimals : TOKEN_DECIMALS));
       }}
       className="text-[12px] text-muted hover:text-ink"
     >
@@ -252,6 +256,7 @@ function ReceiveBalance({
   token: string;
   ticker: string;
 }) {
+  const { network } = useNetwork();
   const { authenticated } = usePrivy();
   const { wallets } = useWallets();
   const address = wallets[0]?.address as Address | undefined;
@@ -267,7 +272,7 @@ function ReceiveBalance({
   }
   return (
     <span className="text-[12px] text-muted">
-      {formatted ?? "…"} {buying ? ticker : "USDC"}
+      {formatted ?? "…"} {buying ? ticker : network.protocol.pairSymbol}
     </span>
   );
 }
@@ -278,6 +283,7 @@ type TradeSuccess = {
   paid: string;
   received: string;
   hash: string;
+  pairSymbol: string;
 };
 
 function TradeSubmit({
@@ -297,6 +303,9 @@ function TradeSubmit({
   quoted: bigint | null;
   onSuccess: (row: TradeSuccess) => void;
 }) {
+  const { network } = useNetwork();
+  const pairDecimals = network.protocol.pairDecimals;
+  const pairSymbol = network.protocol.pairSymbol;
   const { ready, authenticated } = usePrivy();
   const { wallets } = useWallets();
   const { login } = useLogin();
@@ -335,10 +344,10 @@ function TradeSubmit({
         amountOutMin: minOut(quoted),
       });
       const paid = Number(
-        formatUnits(amountIn, buying ? USDC_DECIMALS : TOKEN_DECIMALS),
+        formatUnits(amountIn, buying ? pairDecimals : TOKEN_DECIMALS),
       );
       const received = Number(
-        formatUnits(quoted, buying ? TOKEN_DECIMALS : USDC_DECIMALS),
+        formatUnits(quoted, buying ? TOKEN_DECIMALS : pairDecimals),
       );
       const trade: MarketTrade = {
         hash: tx,
@@ -356,6 +365,7 @@ function TradeSubmit({
         paid: formatTradeQty(paid, !buying),
         received: formatReceive(received, buying),
         hash: tx,
+        pairSymbol,
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Swap failed.");
@@ -392,6 +402,7 @@ function TradeSuccessModal({
   received,
   hash,
   onClose,
+  pairSymbol,
 }: TradeSuccess & { onClose: () => void }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -422,7 +433,9 @@ function TradeSuccessModal({
             : `You sold ${paid} ${ticker}`}
         </p>
         <p className="mt-1 text-[13px] text-muted">
-          {buying ? `Paid ${paid} USDC` : `Received ${received} USDC`}
+          {buying
+            ? `Paid ${paid} ${pairSymbol}`
+            : `Received ${received} ${pairSymbol}`}
         </p>
         <a
           href={explorerTx(hash)}

@@ -73,64 +73,104 @@ export type DexPriceChange = {
   h24?: number;
 };
 
-export async function fetchDexscreenerPoints(
-  token: string,
-  officialPoolId?: string,
-): Promise<{
+type DexPair = {
+  chainId?: string;
+  pairAddress?: string;
+  baseToken?: { address?: string };
+  priceUsd?: string;
+  fdv?: number;
+  marketCap?: number;
+  liquidity?: { usd?: number };
+  priceChange?: DexPriceChange;
+};
+
+export type DexMarket = {
   priceUsd: number | null;
   fdv: number | null;
   priceChange: DexPriceChange | null;
   points: ChartPoint[];
-}> {
-  const empty = {
-    priceUsd: null,
-    fdv: null,
-    priceChange: null,
-    points: [] as ChartPoint[],
-  };
-  try {
-    const response = await fetch(
-      `https://api.dexscreener.com/latest/dex/tokens/${token}`,
-    );
-    if (!response.ok) return empty;
-    const body = (await response.json()) as {
-      pairs?: {
-        chainId?: string;
-        pairAddress?: string;
-        priceUsd?: string;
-        fdv?: number;
-        marketCap?: number;
-        liquidity?: { usd?: number };
-        priceChange?: DexPriceChange;
-      }[];
-    };
-    const arcPairs = (body.pairs ?? []).filter((item) => item.chainId === "arc");
-    const ranked = [...(arcPairs.length > 0 ? arcPairs : body.pairs ?? [])].sort(
-      (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
-    );
-    const official = officialPoolId?.toLowerCase();
-    const pair =
-      (official
-        ? ranked.find((item) => item.pairAddress?.toLowerCase() === official)
-        : undefined) ?? ranked[0];
-    if (!pair) return empty;
-    const priceUsd = pair.priceUsd ? Number(pair.priceUsd) : null;
-    if (!priceUsd || !Number.isFinite(priceUsd)) return empty;
-    const reported =
-      typeof pair?.marketCap === "number" && pair.marketCap > 0
-        ? pair.marketCap
-        : typeof pair?.fdv === "number"
-          ? pair.fdv
-          : priceUsd * TOTAL_SUPPLY;
-    return {
-      priceUsd,
-      fdv: reported,
-      priceChange: pair?.priceChange ?? null,
-      points: [],
-    };
-  } catch {
-    return empty;
+};
+
+const emptyDex: DexMarket = {
+  priceUsd: null,
+  fdv: null,
+  priceChange: null,
+  points: [],
+};
+
+export async function fetchDexscreenerPoints(
+  token: string,
+  officialPoolId?: string,
+): Promise<DexMarket> {
+  const markets = await fetchDexscreenerMarkets([
+    { address: token, poolId: officialPoolId },
+  ]);
+  return markets.get(token.toLowerCase()) ?? emptyDex;
+}
+
+export async function fetchDexscreenerMarkets(
+  tokens: { address: string; poolId?: string }[],
+) {
+  const markets = new Map<string, DexMarket>();
+  if (tokens.length === 0) return markets;
+  const chunks: { address: string; poolId?: string }[][] = [];
+  for (let index = 0; index < tokens.length; index += 20) {
+    chunks.push(tokens.slice(index, index + 20));
   }
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const response = await fetch(
+          `https://api.dexscreener.com/latest/dex/tokens/${chunk.map((row) => row.address).join(",")}`,
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as { pairs?: DexPair[] };
+        const byToken = new Map<string, DexPair[]>();
+        for (const pair of body.pairs ?? []) {
+          const address = (pair.baseToken?.address ?? "").toLowerCase();
+          if (!address) continue;
+          const list = byToken.get(address) ?? [];
+          list.push(pair);
+          byToken.set(address, list);
+        }
+        for (const row of chunk) {
+          const key = row.address.toLowerCase();
+          const picked = pickDexPair(byToken.get(key) ?? [], row.poolId);
+          if (picked) markets.set(key, picked);
+        }
+      } catch {
+        /* keep last known */
+      }
+    }),
+  );
+  return markets;
+}
+
+function pickDexPair(pairs: DexPair[], officialPoolId?: string): DexMarket | null {
+  const arcPairs = pairs.filter((item) => item.chainId === "arc");
+  const ranked = [...(arcPairs.length > 0 ? arcPairs : pairs)].sort(
+    (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
+  );
+  const official = officialPoolId?.toLowerCase();
+  const pair =
+    (official
+      ? ranked.find((item) => item.pairAddress?.toLowerCase() === official)
+      : undefined) ?? ranked[0];
+  if (!pair) return null;
+  const priceUsd = pair.priceUsd ? Number(pair.priceUsd) : null;
+  if (!priceUsd || !Number.isFinite(priceUsd)) return null;
+  const reported =
+    typeof pair.marketCap === "number" && pair.marketCap > 0
+      ? pair.marketCap
+      : typeof pair.fdv === "number"
+        ? pair.fdv
+        : priceUsd * TOTAL_SUPPLY;
+  return {
+    priceUsd,
+    fdv: reported,
+    priceChange: pair.priceChange ?? null,
+    points: [],
+  };
 }
 
 export function filterWindow(points: ChartPoint[], seconds: number) {

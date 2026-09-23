@@ -1,8 +1,10 @@
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import type { Address } from "viem";
 import { useUsdcBalance } from "../lib/use-usdc-balance";
+import { useNetwork } from "../lib/use-network";
 
 export function WalletUsdcBalance() {
+  const { network } = useNetwork();
   const { authenticated } = usePrivy();
   const { wallets } = useWallets();
   const address = wallets[0]?.address as Address | undefined;
@@ -20,7 +22,7 @@ export function WalletUsdcBalance() {
 
   return (
     <span className="text-[12px] font-medium text-ink">
-      {formatted} <span className="text-muted">USDC</span>
+      {formatted} <span className="text-muted">{network.protocol.pairSymbol}</span>
     </span>
   );
 }

@@ -7,15 +7,8 @@ import {
   type Hex,
 } from "viem";
 import type { ConnectedWallet } from "@privy-io/react-auth";
-import {
-  PERMIT2,
-  USDC,
-  USDC_DECIMALS,
-  V4_QUOTER,
-  V4_STATE_VIEW,
-  V4_UNIVERSAL_ROUTER,
-} from "./addresses";
-import { asError, publicClient, writePrepared } from "./factory";
+import { asError, ensureWeth, publicClient, writePrepared } from "./factory";
+import { protocolOf } from "./networks";
 import { launchPoolId, launchPoolKey, quoteWeiFromSqrt } from "./pool-price";
 
 const TOKEN_DECIMALS = 18;
@@ -147,7 +140,7 @@ export async function quoteExactIn({
   const zeroForOne = buying ? buyZeroForOne(tokenIsCurrency0) : tokenIsCurrency0;
   try {
     const { result } = await publicClient.simulateContract({
-      address: V4_QUOTER,
+      address: protocolOf().v4Quoter,
       abi: quoterAbi,
       functionName: "quoteExactInputSingle",
       args: [
@@ -184,11 +177,15 @@ export async function swapExactIn({
 }): Promise<Hex> {
   if (amountIn <= 0n) throw new Error("Enter an amount.");
   const account = wallet.address as Address;
-  const input = buying ? USDC : token;
-  const output = buying ? token : USDC;
+  const pair = protocolOf().pairAsset;
+  const input = buying ? pair : token;
+  const output = buying ? token : pair;
   const zeroForOne = buying ? buyZeroForOne(tokenIsCurrency0) : tokenIsCurrency0;
   const poolKey = launchPoolKey(token);
 
+  if (buying && protocolOf().pairSymbol === "WETH") {
+    await ensureWeth(wallet, account, amountIn);
+  }
   await ensurePermit2(wallet, account, input, amountIn);
 
   const commands = encodePacked(["uint8"], [V4_SWAP]);
@@ -251,7 +248,7 @@ export async function swapExactIn({
   try {
     const hash = await writePrepared({
       wallet,
-      address: V4_UNIVERSAL_ROUTER,
+      address: protocolOf().v4UniversalRouter,
       abi: routerAbi,
       functionName: "execute",
       args: [commands, [v4Input], BigInt(Math.floor(Date.now() / 1000) + 180)],
@@ -272,7 +269,7 @@ async function quoteFromSpot(
   amountIn: bigint,
 ) {
   const slot0 = await publicClient.readContract({
-    address: V4_STATE_VIEW,
+    address: protocolOf().v4StateView,
     abi: stateViewAbi,
     functionName: "getSlot0",
     args: [launchPoolId(token)],
@@ -300,7 +297,7 @@ function quoteFromRevert(error: unknown) {
 export function parseTradeAmount(value: string, buying: boolean) {
   const trimmed = value.trim();
   if (!trimmed || Number(trimmed) <= 0) return 0n;
-  return parseUnits(trimmed, buying ? USDC_DECIMALS : TOKEN_DECIMALS);
+  return parseUnits(trimmed, buying ? protocolOf().pairDecimals : TOKEN_DECIMALS);
 }
 
 export function minOut(quoted: bigint) {
@@ -317,7 +314,7 @@ async function ensurePermit2(
     address: token,
     abi: erc20Abi,
     functionName: "allowance",
-    args: [account, PERMIT2],
+    args: [account, protocolOf().permit2],
   });
   if (allowance < needed) {
     const hash = await writePrepared({
@@ -325,7 +322,7 @@ async function ensurePermit2(
       address: token,
       abi: erc20Abi,
       functionName: "approve",
-      args: [PERMIT2, PERMIT2_MAX],
+      args: [protocolOf().permit2, PERMIT2_MAX],
       gasFallback: 80_000n,
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -333,20 +330,20 @@ async function ensurePermit2(
   }
 
   const permit = await publicClient.readContract({
-    address: PERMIT2,
+    address: protocolOf().permit2,
     abi: permit2Abi,
     functionName: "allowance",
-    args: [account, token, V4_UNIVERSAL_ROUTER],
+    args: [account, token, protocolOf().v4UniversalRouter],
   });
   const now = Math.floor(Date.now() / 1000);
   if (permit[0] >= needed && Number(permit[1]) > now + 60) return;
 
   const hash = await writePrepared({
     wallet,
-    address: PERMIT2,
+    address: protocolOf().permit2,
     abi: permit2Abi,
     functionName: "approve",
-    args: [token, V4_UNIVERSAL_ROUTER, PERMIT2_MAX, now + 30 * 24 * 60 * 60],
+    args: [token, protocolOf().v4UniversalRouter, PERMIT2_MAX, now + 30 * 24 * 60 * 60],
     gasFallback: 80_000n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });

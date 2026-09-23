@@ -27,3 +27,17 @@ Broadcast: `contracts/broadcast/Deploy.s.sol/5042/run-latest.json`. Live `eth_ca
 - USDC / usdQuote: `0x3600000000000000000000000000000000000000`
 
 Previous factory (TEST1 / TEST2, no `imageUri()`): `0xef36b4BD007A35A5058adB60230fF69A39003938`
+
+## Robinhood Chain (4663)
+
+Official Uniswap row + `eth_getCode` on `https://rpc.mainnet.chain.robinhood.com`.
+
+- WETH: `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` (18 decimals)
+- V4 PoolManager: `0x8366a39CC670B4001A1121B8F6A443A643e40951`
+- V4 PositionManager: `0x58daec3116aae6D93017bAAea7749052E8a04fA7`
+- V4 StateView: `0xF3334192D15450CdD385c8B70e03f9A6bD9E673b`
+- V4 Quoter: `0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94`
+- V4 Universal Router: `0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99`
+- Permit2: `0x000000000022D473030F116dDEE9F6B43aC78BA3`
+
+Zorp factory / hook / locker / council: empty until `DeployRobinhood.s.sol` is broadcast. Then fill `VITE_RH_*` in the frontend env.

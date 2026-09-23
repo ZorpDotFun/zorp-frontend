@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseAbiItem, type Address } from "viem";
-import { GRADUATION_MC_USD, LAUNCH_FACTORY, TOTAL_SUPPLY } from "./addresses";
+import { fetchApiJson } from "./api";
+import { GRADUATION_MC_USD, TOTAL_SUPPLY } from "./addresses";
+import { getNetworkId, NETWORK_EVENT } from "./active-network";
+import { protocolOf } from "./networks";
 import {
   publicClient,
   peekLaunch,
@@ -9,31 +12,47 @@ import {
   readLaunches,
   rememberLaunch,
 } from "./factory";
-import { launchEverGraduated, launchPoolId, readLiveUsdPrice } from "./pool-price";
-import { fetchDexscreenerPoints } from "./token-chart-data";
+import { launchPoolId, readLiveUsdPrices } from "./pool-price";
+import { fetchDexscreenerMarkets } from "./token-chart-data";
 import {
   impliedPeakFdv,
   hasGraduated,
+  noteAth,
   noteMarketCap,
+  tokenAth,
   type Token,
 } from "./tokens";
 
-const peakChecked = new Set<string>();
-const PRICE_POLL_MS = 8_000;
-const SCAN_CONCURRENCY = 3;
-const LIST_KEY = "zorp-launch-list";
+const PRICE_POLL_MS = 12_000;
+function listKey() {
+  return `zorp-launch-list-v2-${getNetworkId()}`;
+}
 
 const launchedEvent = parseAbiItem(
   "event TokenLaunched(address indexed token, address indexed creator, address indexed pairAsset, uint256 supply, uint256 openingPrice, uint256 firstBuySpent, uint256 firstBuyTokens)",
 );
 
 export function useLaunches() {
+  const [networkId, setNetworkIdState] = useState(getNetworkId);
   const [tokens, setTokens] = useState<Token[]>(() => readCachedLaunchList());
   const [loading, setLoading] = useState(() => readCachedLaunchList().length === 0);
   const [error, setError] = useState<string | null>(null);
   const tokensRef = useRef<Token[]>([]);
   const refreshGen = useRef(0);
   tokensRef.current = tokens;
+
+  useEffect(() => {
+    const sync = () => {
+      const next = getNetworkId();
+      setNetworkIdState(next);
+      const cached = readCachedLaunchList();
+      tokensRef.current = cached;
+      setTokens(cached);
+      setLoading(cached.length === 0);
+    };
+    window.addEventListener(NETWORK_EVENT, sync);
+    return () => window.removeEventListener(NETWORK_EVENT, sync);
+  }, []);
 
   const publish = useCallback((next: Token[]) => {
     for (const row of next) rememberLaunch(row);
@@ -46,20 +65,25 @@ export function useLaunches() {
     const gen = ++refreshGen.current;
     if (!silent && tokensRef.current.length === 0) setLoading(true);
     try {
+      const apiRows =
+        getNetworkId() === "arc" ? await fetchApiJson<Token[]>("/launches") : null;
+      if (apiRows && apiRows.length > 0) {
+        if (gen !== refreshGen.current) return;
+        publish(mergeCached(apiRows.map(withKnownGraduation), tokensRef.current));
+        setError(null);
+        setLoading(false);
+        return;
+      }
       const rows = await readLaunches();
       if (gen !== refreshGen.current) return;
-      const seeded = rows.map(withKnownGraduation);
+      const seeded = mergeCached(rows.map(withKnownGraduation), tokensRef.current);
       publish(seeded);
       setError(null);
       setLoading(false);
 
-      const priced = await Promise.all(seeded.map(withLiveMarket));
+      const priced = await withLiveMarkets(seeded);
       if (gen !== refreshGen.current) return;
       publish(priced);
-
-      const scanned = await mapPool(priced, SCAN_CONCURRENCY, scanGraduation);
-      if (gen !== refreshGen.current) return;
-      publish(scanned);
     } catch (cause) {
       if (!silent || tokensRef.current.length === 0) {
         setError(cause instanceof Error ? cause.message : "Could not load launches.");
@@ -69,9 +93,16 @@ export function useLaunches() {
   }, [publish]);
 
   const refreshPrices = useCallback(async () => {
+    const apiRows = getNetworkId() === "arc"
+      ? await fetchApiJson<Token[]>("/launches")
+      : null;
+    if (apiRows && apiRows.length > 0) {
+      publish(mergeCached(apiRows.map(withKnownGraduation), tokensRef.current));
+      return;
+    }
     const current = tokensRef.current;
     if (current.length === 0) return;
-    const priced = await Promise.all(current.map(withLiveMarket));
+    const priced = await withLiveMarkets(current);
     publish(priced);
   }, [publish]);
 
@@ -87,13 +118,12 @@ export function useLaunches() {
       }
       const seeded = withKnownGraduation(row);
       publish([seeded, ...tokensRef.current.filter((item) => item.address.toLowerCase() !== key)]);
-      const priced = await withLiveMarket(seeded);
-      const scanned = await scanGraduation(priced);
-      rememberLaunch(scanned);
+      const [priced] = await withLiveMarkets([seeded]);
+      rememberLaunch(priced);
       setTokens((current) => {
         const next = current.some((item) => item.address.toLowerCase() === key)
-          ? current.map((item) => (item.address.toLowerCase() === key ? scanned : item))
-          : [scanned, ...current];
+          ? current.map((item) => (item.address.toLowerCase() === key ? priced : item))
+          : [priced, ...current];
         writeCachedLaunchList(next);
         tokensRef.current = next;
         return next;
@@ -108,18 +138,21 @@ export function useLaunches() {
     let cancelled = false;
     void refresh(tokensRef.current.length > 0);
 
-    const unwatch = publicClient.watchEvent({
-      address: LAUNCH_FACTORY,
-      event: launchedEvent,
-      pollingInterval: 2_000,
-      onLogs: (logs) => {
-        if (cancelled) return;
-        for (const log of logs) {
-          const token = log.args.token;
-          if (token) void upsert(token);
-        }
-      },
-    });
+    const factory = protocolOf().factory;
+    const unwatch = protocolOf().deployed
+      ? publicClient.watchEvent({
+          address: factory,
+          event: launchedEvent,
+          pollingInterval: 2_000,
+          onLogs: (logs) => {
+            if (cancelled) return;
+            for (const log of logs) {
+              const token = log.args.token;
+              if (token) void upsert(token);
+            }
+          },
+        })
+      : () => {};
 
     const poll = window.setInterval(() => {
       if (cancelled || document.visibilityState === "hidden") return;
@@ -144,15 +177,35 @@ export function useLaunches() {
       window.clearInterval(poll);
       window.clearInterval(pricePoll);
     };
-  }, [refresh, refreshPrices, upsert]);
+  }, [networkId, refresh, refreshPrices, upsert]);
 
   return { tokens, loading, error, refresh };
 }
 
+function mergeCached(fresh: Token[], prev: Token[]) {
+  const old = new Map(prev.map((row) => [row.address.toLowerCase(), row]));
+  return fresh.map((row) => {
+    const prior = old.get(row.address.toLowerCase());
+    if (!prior) return row;
+    return {
+      ...row,
+      image: row.image || prior.image,
+      ath: Math.max(row.ath ?? 0, prior.ath ?? 0),
+      volume: row.volume || prior.volume,
+      graduated: row.graduated || prior.graduated,
+    };
+  });
+}
+
 function withKnownGraduation(token: Token): Token {
+  const ath = tokenAth(token);
   return {
     ...token,
-    graduated: token.graduated || hasGraduated(token.address),
+    ath,
+    graduated:
+      token.graduated ||
+      hasGraduated(token.address) ||
+      ath >= GRADUATION_MC_USD,
   };
 }
 
@@ -160,81 +213,61 @@ function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function withLiveMarket(token: Token): Promise<Token> {
+async function withLiveMarkets(tokens: Token[]): Promise<Token[]> {
+  if (tokens.length === 0) return tokens;
   try {
-    const [live, dex] = await Promise.all([
-      readLiveUsdPrice(token.address as `0x${string}`, token.tokenIsCurrency0),
-      fetchDexscreenerPoints(
-        token.address,
-        launchPoolId(token.address as `0x${string}`),
+    const [lives, dex] = await Promise.all([
+      readLiveUsdPrices(
+        tokens.map((token) => ({
+          address: token.address as Address,
+          tokenIsCurrency0: token.tokenIsCurrency0,
+        })),
+      ),
+      fetchDexscreenerMarkets(
+        tokens.map((token) => ({
+          address: token.address,
+          poolId: launchPoolId(token.address as Address),
+        })),
       ),
     ]);
-    const livePrice = live ?? 0;
-    const dexPrice = dex.priceUsd ?? 0;
-    const price = [livePrice, dexPrice, token.price].reduce(
-      (best, next) => (next > best ? next : best),
-      0,
-    );
-    const liveFdv = livePrice > 0 ? livePrice * TOTAL_SUPPLY : 0;
-    const dexFdv = dex.fdv && dex.fdv > 0 ? dex.fdv : 0;
-    const fdv =
-      Math.max(liveFdv, dexFdv, price > 0 ? price * TOTAL_SUPPLY : 0) ||
-      token.fdv;
-    const implied = impliedPeakFdv(dexFdv || fdv, dex.priceChange);
-    noteMarketCap(token.address, fdv, implied);
-    const graduated =
-      token.graduated ||
-      fdv >= GRADUATION_MC_USD ||
-      hasGraduated(token.address) ||
-      implied >= GRADUATION_MC_USD;
-    if (graduated) noteMarketCap(token.address, GRADUATION_MC_USD);
-    return { ...token, price, fdv, mcap: fdv, graduated };
+    return tokens.map((token) => {
+      const key = token.address.toLowerCase();
+      const market = dex.get(key);
+      const livePrice = lives.get(key) ?? 0;
+      const dexPrice = market?.priceUsd ?? 0;
+      const price = [livePrice, dexPrice, token.price].reduce(
+        (best, next) => (next > best ? next : best),
+        0,
+      );
+      const liveFdv = livePrice > 0 ? livePrice * TOTAL_SUPPLY : 0;
+      const dexFdv = market?.fdv && market.fdv > 0 ? market.fdv : 0;
+      const fdv =
+        Math.max(liveFdv, dexFdv, price > 0 ? price * TOTAL_SUPPLY : 0) ||
+        token.fdv;
+      const implied = impliedPeakFdv(dexFdv || fdv, market?.priceChange);
+      const ath = noteAth(token.address, Math.max(fdv, implied, token.ath ?? 0));
+      noteMarketCap(token.address, fdv, implied);
+      const graduated =
+        token.graduated ||
+        fdv >= GRADUATION_MC_USD ||
+        hasGraduated(token.address) ||
+        ath >= GRADUATION_MC_USD;
+      if (graduated) noteMarketCap(token.address, GRADUATION_MC_USD);
+      return { ...token, price, fdv, mcap: fdv, ath, graduated };
+    });
   } catch {
-    return withKnownGraduation(token);
+    return tokens.map(withKnownGraduation);
   }
-}
-
-async function scanGraduation(token: Token): Promise<Token> {
-  if (token.graduated || hasGraduated(token.address)) {
-    return { ...token, graduated: true };
-  }
-  const key = token.address.toLowerCase();
-  if (peakChecked.has(key)) return token;
-  peakChecked.add(key);
-  const ever = await launchEverGraduated(
-    token.address as `0x${string}`,
-    token.tokenIsCurrency0,
-  );
-  if (!ever) return token;
-  noteMarketCap(token.address, GRADUATION_MC_USD);
-  return { ...token, graduated: true };
-}
-
-async function mapPool<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-) {
-  if (items.length === 0) return [] as R[];
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      out[index] = await fn(items[index]);
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
-  );
-  return out;
 }
 
 function readCachedLaunchList(): Token[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = sessionStorage.getItem(LIST_KEY);
+    const raw =
+      window.localStorage.getItem(listKey()) ??
+      (getNetworkId() === "arc"
+        ? window.sessionStorage.getItem("zorp-launch-list")
+        : null);
     const rows = raw ? (JSON.parse(raw) as Token[]) : [];
     for (const row of rows) rememberLaunch(row);
     return rows;
@@ -244,8 +277,14 @@ function readCachedLaunchList(): Token[] {
 }
 
 function writeCachedLaunchList(tokens: Token[]) {
+  const raw = JSON.stringify(tokens);
   try {
-    sessionStorage.setItem(LIST_KEY, JSON.stringify(tokens));
+    window.localStorage.setItem(listKey(), raw);
+  } catch {
+    /* quota / private */
+  }
+  try {
+    window.sessionStorage.setItem(listKey(), raw);
   } catch {
     /* private mode */
   }

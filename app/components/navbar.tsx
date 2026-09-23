@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
+import { ChainSwitch } from "./chain-switch";
 import { ConnectWallet } from "./connect-wallet";
 import { useTheme } from "../lib/theme";
 
@@ -66,6 +67,7 @@ export function Navbar() {
         </nav>
 
         <div className="relative z-10 flex items-center gap-2 sm:gap-3">
+          <ChainSwitch />
           <button
             type="button"
             onClick={toggle}

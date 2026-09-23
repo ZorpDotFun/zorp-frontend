@@ -33,17 +33,50 @@ export const arcChain = defineChain({
   },
 });
 
-export function arcTransport() {
+export const ROBINHOOD_CHAIN_ID = 4663;
+export const ROBINHOOD_EXPLORER =
+  import.meta.env.VITE_RH_EXPLORER || "https://robinhoodchain.blockscout.com";
+export const ROBINHOOD_RPC_PRIMARY =
+  import.meta.env.VITE_RH_RPC || "https://rpc.mainnet.chain.robinhood.com";
+
+export const ROBINHOOD_RPCS = [ROBINHOOD_RPC_PRIMARY].filter(
+  (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index,
+);
+
+export const robinhoodChain = defineChain({
+  id: ROBINHOOD_CHAIN_ID,
+  name: "Robinhood Chain",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: {
+    default: { http: ROBINHOOD_RPCS },
+  },
+  blockExplorers: {
+    default: { name: "Robinhood Explorer", url: ROBINHOOD_EXPLORER },
+  },
+  contracts: {
+    multicall3: { address: MULTICALL3 },
+  },
+});
+
+export function rpcTransport(urls: string[]) {
   return fallback(
-    ARC_RPCS.map((url) =>
+    urls.map((url) =>
       http(url, {
-        timeout: 3_500,
+        timeout: 8_000,
         retryCount: 0,
-        fetch: failoverFetch,
+        fetchFn: failoverFetch,
       }),
     ),
     { rank: false },
   );
+}
+
+export function arcTransport() {
+  return rpcTransport(ARC_RPCS);
+}
+
+export function robinhoodTransport() {
+  return rpcTransport(ROBINHOOD_RPCS);
 }
 
 async function failoverFetch(input: RequestInfo | URL, init?: RequestInit) {

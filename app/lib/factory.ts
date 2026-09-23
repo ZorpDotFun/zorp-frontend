@@ -1,5 +1,4 @@
 import {
-  createPublicClient,
   createWalletClient,
   custom,
   encodeFunctionData,
@@ -12,32 +11,21 @@ import {
   type Hex,
 } from "viem";
 import type { ConnectedWallet } from "@privy-io/react-auth";
-import {
-  FEE_DISTRIBUTOR,
-  LAUNCH_FACTORY,
-  LAUNCH_HOOK,
-  LAUNCH_LOCKER,
-  TARGET_FDV_USD,
-  USDC,
-  USDC_DECIMALS,
-  V4_POOL_MANAGER,
-  ZORP_BUYBACK,
-} from "./addresses";
-import {
-  ARC_CHAIN_ID,
-  ARC_EXPLORER,
-  ARC_RPC_PRIMARY,
-  arcChain,
-  arcTransport,
-} from "./chains";
+import { TARGET_FDV_USD } from "./addresses";
+import { ARC_RPC_PRIMARY } from "./chains";
 import { PROTOCOL_SWAP_FEE_BPS, presetFees, validateFees, type FeeConfig } from "./fee-models";
+import { getNetwork, getPublicClient, protocolOf } from "./networks";
 import { toIpfsUri } from "./token-image";
 import type { Token } from "./tokens";
 import { requestTokenVerification } from "./verify-launch-token";
 
-export const publicClient = createPublicClient({
-  chain: arcChain,
-  transport: arcTransport(),
+export { getPublicClient };
+export const publicClient = new Proxy({} as ReturnType<typeof getPublicClient>, {
+  get(_target, prop, _receiver) {
+    const client = getPublicClient() as unknown as Record<PropertyKey, unknown>;
+    const value = client[prop];
+    return typeof value === "function" ? (value as Function).bind(client) : value;
+  },
 });
 
 const launchCache = new Map<string, Token>();
@@ -71,6 +59,13 @@ export const launchFactoryAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "pairUsdPrice6",
+    stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
   },
   {
     type: "function",
@@ -286,10 +281,12 @@ function sameAddress(left: Address, right: Address) {
 }
 
 export async function readProtocolFeeBps() {
+  const protocol = protocolOf();
+  if (!protocol.deployed) return PROTOCOL_SWAP_FEE_BPS;
   try {
     return Number(
       await publicClient.readContract({
-        address: ZORP_BUYBACK,
+        address: protocol.buyback,
         abi: buybackAbi,
         functionName: "protocolFeeBps",
       }),
@@ -300,51 +297,57 @@ export async function readProtocolFeeBps() {
 }
 
 export async function assertLaunchReady() {
-  const [wired, enabled, quote, usdcOk, hook, buyback, distributor, locker, poolManager] =
+  const protocol = protocolOf();
+  if (!protocol.deployed) {
+    throw new Error(
+      `Zorp is not live on ${getNetwork().name} yet. Deploy with DeployRobinhood.s.sol, then set VITE_RH_* addresses.`,
+    );
+  }
+  const [wired, enabled, quote, pairOk, hook, buyback, distributor, locker, poolManager] =
     await Promise.all([
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "wired",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "launchEnabled",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "usdQuote",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "approvedPairAssets",
-        args: [USDC],
+        args: [protocol.pairAsset],
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "hook",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "buyback",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "distributor",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "locker",
       }),
       publicClient.readContract({
-        address: LAUNCH_FACTORY,
+        address: protocol.factory,
         abi: launchFactoryAbi,
         functionName: "poolManager",
       }),
@@ -352,15 +355,17 @@ export async function assertLaunchReady() {
 
   if (!wired) throw new Error("Factory is not wired.");
   if (!enabled) throw new Error("Launches are disabled.");
-  if (!usdcOk) throw new Error("USDC is not an approved pair.");
-  if (!sameAddress(quote, USDC)) throw new Error("Factory usdQuote is not USDC.");
-  if (!sameAddress(hook, LAUNCH_HOOK)) throw new Error("Factory hook address mismatch.");
-  if (!sameAddress(buyback, ZORP_BUYBACK)) throw new Error("Factory buyback address mismatch.");
-  if (!sameAddress(distributor, FEE_DISTRIBUTOR)) {
+  if (!pairOk) throw new Error(`${protocol.pairSymbol} is not an approved pair.`);
+  if (protocol.pairSymbol === "USDC" && !sameAddress(quote, protocol.pairAsset)) {
+    throw new Error("Factory usdQuote is not USDC.");
+  }
+  if (!sameAddress(hook, protocol.hook)) throw new Error("Factory hook address mismatch.");
+  if (!sameAddress(buyback, protocol.buyback)) throw new Error("Factory buyback address mismatch.");
+  if (!sameAddress(distributor, protocol.distributor)) {
     throw new Error("Factory distributor address mismatch.");
   }
-  if (!sameAddress(locker, LAUNCH_LOCKER)) throw new Error("Factory locker address mismatch.");
-  if (!sameAddress(poolManager, V4_POOL_MANAGER)) {
+  if (!sameAddress(locker, protocol.locker)) throw new Error("Factory locker address mismatch.");
+  if (!sameAddress(poolManager, protocol.v4PoolManager)) {
     throw new Error("Factory PoolManager address mismatch.");
   }
 }
@@ -384,10 +389,13 @@ export function asError(error: unknown) {
   }
   const text = parts.join(" ");
   if (/rate limit|exceeds defined limit/i.test(text)) {
-    return "Arc RPC is rate limited. Wait a few seconds and try again.";
+    return `${getNetwork().name} RPC is rate limited. Wait a few seconds and try again.`;
   }
   if (/arc-scan|could not complete this request|No answer was obtained|Failed to fetch|eth_getTransactionCount|eth_gasPrice/i.test(text)) {
-    return `Wallet RPC did not respond. In Rabby or MetaMask, edit Arc and set RPC URL to ${ARC_RPC_PRIMARY}.`;
+    const network = getNetwork();
+    const rpc =
+      network.id === "arc" ? ARC_RPC_PRIMARY : network.chain.rpcUrls.default.http[0];
+    return `Wallet RPC did not respond. In Rabby or MetaMask, edit ${network.name} and set RPC URL to ${rpc}.`;
   }
   if (/user rejected|denied transaction|rejected the request/i.test(text)) {
     return "Signature was cancelled. Confirm the wallet popup, or switch the connected wallet to MetaMask.";
@@ -413,12 +421,13 @@ export async function writePrepared({
   value?: bigint;
   gasFallback?: bigint;
 }): Promise<Hex> {
-  await wallet.switchChain(ARC_CHAIN_ID);
+  const network = getNetwork();
+  await wallet.switchChain(network.chainId);
   const provider = await wallet.getEthereumProvider();
   const account = wallet.address as Address;
   const walletClient = createWalletClient({
     account,
-    chain: arcChain,
+    chain: network.chain,
     transport: custom(provider),
   });
 
@@ -443,12 +452,12 @@ export async function writePrepared({
     });
     gas = (estimated * 13n) / 10n;
   } catch {
-    // Wallet RPCs on Arc often fail here; a padded fallback is enough to send.
+    // Wallet RPCs often fail here; a padded fallback is enough to send.
   }
 
   return walletClient.sendTransaction({
     account,
-    chain: arcChain,
+    chain: network.chain,
     to: address,
     data,
     value,
@@ -516,11 +525,12 @@ function toToken(
     creator: info[0],
     mcap: TARGET_FDV_USD,
     fdv: TARGET_FDV_USD,
+    ath: TARGET_FDV_USD,
     volume: 0,
     price: TARGET_FDV_USD / 1_000_000_000,
     change24h: 0,
     launchedAt: Number(launchedAt) * 1000,
-    pair: "USDC",
+    pair: protocolOf().pairSymbol,
     hue: hueFromAddress(address),
     recentBuys: 0,
     tokenIsCurrency0,
@@ -528,6 +538,7 @@ function toToken(
 }
 
 export async function readLaunch(address: Address): Promise<Token | null> {
+  const factory = protocolOf().factory;
   const [info, launch] = await Promise.all([
     publicClient.readContract({
       address,
@@ -535,7 +546,7 @@ export async function readLaunch(address: Address): Promise<Token | null> {
       functionName: "getTokenInfo",
     }),
     publicClient.readContract({
-      address: LAUNCH_FACTORY,
+      address: factory,
       abi: launchFactoryAbi,
       functionName: "launches",
       args: [address],
@@ -571,8 +582,10 @@ async function readOnchainImage(address: Address): Promise<string> {
 }
 
 export async function readLaunchCount(): Promise<number> {
+  const protocol = protocolOf();
+  if (!protocol.deployed) return 0;
   const count = await publicClient.readContract({
-    address: LAUNCH_FACTORY,
+    address: protocol.factory,
     abi: launchFactoryAbi,
     functionName: "launchCount",
   });
@@ -580,38 +593,108 @@ export async function readLaunchCount(): Promise<number> {
 }
 
 export async function readLaunches(): Promise<Token[]> {
+  const protocol = protocolOf();
+  if (!protocol.deployed) return [];
   const count = await publicClient.readContract({
-    address: LAUNCH_FACTORY,
+    address: protocol.factory,
     abi: launchFactoryAbi,
     functionName: "launchCount",
   });
   if (count === 0n) return [];
 
   const indexes = Array.from({ length: Number(count) }, (_, i) => BigInt(i));
-  const addresses = await Promise.all(
-    indexes.map((index) =>
-      publicClient.readContract({
-        address: LAUNCH_FACTORY,
+  const addresses = await readAllTokenAddresses(indexes);
+  const rows = await readLaunchRows(addresses);
+
+  return rows.sort((a, b) => b.launchedAt - a.launchedAt);
+}
+
+async function readAllTokenAddresses(indexes: bigint[]): Promise<Address[]> {
+  try {
+    const rows = await publicClient.multicall({
+      allowFailure: false,
+      contracts: indexes.map((index) => ({
+        address: protocolOf().factory,
         abi: launchFactoryAbi,
-        functionName: "allTokens",
+        functionName: "allTokens" as const,
         args: [index],
+      })),
+    });
+    return rows as Address[];
+  } catch {
+    return Promise.all(
+      indexes.map((index) =>
+        publicClient.readContract({
+          address: protocolOf().factory,
+          abi: launchFactoryAbi,
+          functionName: "allTokens",
+          args: [index],
+        }),
+      ),
+    );
+  }
+}
+
+async function readLaunchRows(addresses: Address[]): Promise<Token[]> {
+  try {
+    const [infos, launches] = await Promise.all([
+      publicClient.multicall({
+        allowFailure: true,
+        contracts: addresses.map((address) => ({
+          address,
+          abi: launchTokenAbi,
+          functionName: "getTokenInfo" as const,
+        })),
       }),
-    ),
-  );
-
-  const rows = await Promise.all(
-    addresses.map(async (address) => {
-      try {
-        return await readLaunch(address);
-      } catch {
-        return null;
-      }
-    }),
-  );
-
-  return rows
-    .filter((row): row is Token => row !== null)
-    .sort((a, b) => b.launchedAt - a.launchedAt);
+      publicClient.multicall({
+        allowFailure: true,
+        contracts: addresses.map((address) => ({
+          address: protocolOf().factory,
+          abi: launchFactoryAbi,
+          functionName: "launches" as const,
+          args: [address],
+        })),
+      }),
+    ]);
+    const rows: Token[] = [];
+    for (let index = 0; index < addresses.length; index += 1) {
+      const info = infos[index];
+      const launch = launches[index];
+      if (info.status !== "success" || launch.status !== "success") continue;
+      if (!launch.result[10]) continue;
+      const image = info.result[3].trim();
+      const token = toToken(
+        addresses[index],
+        [
+          info.result[0],
+          info.result[1],
+          info.result[2],
+          image,
+          info.result[4],
+          info.result[5],
+          info.result[6],
+          info.result[7],
+        ],
+        launch.result[6],
+        launch.result[2],
+        launch.result[9],
+      );
+      rememberLaunch(token);
+      rows.push(token);
+    }
+    return rows;
+  } catch {
+    const rows = await Promise.all(
+      addresses.map(async (address) => {
+        try {
+          return await readLaunch(address);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return rows.filter((row): row is Token => row !== null);
+  }
 }
 
 export async function launchToken({
@@ -649,23 +732,27 @@ export async function launchToken({
 
   await assertLaunchReady();
 
-  const firstBuyCap = parseUnits(firstBuyUsdc || "0", USDC_DECIMALS);
+  const protocol = protocolOf();
+  const firstBuyCap = parseUnits(firstBuyUsdc || "0", protocol.pairDecimals);
   if (firstBuyCap > 0n) {
+    if (protocol.pairSymbol === "WETH") {
+      await ensureWeth(wallet, account, firstBuyCap);
+    }
     const allowance = await publicClient.readContract({
-      address: USDC,
+      address: protocol.pairAsset,
       abi: erc20Abi,
       functionName: "allowance",
-      args: [account, LAUNCH_FACTORY],
+      args: [account, protocol.factory],
     });
     if (allowance < firstBuyCap) {
       let approveHash: Hex;
       try {
         approveHash = await writePrepared({
           wallet,
-          address: USDC,
+          address: protocol.pairAsset,
           abi: erc20Abi,
           functionName: "approve",
-          args: [LAUNCH_FACTORY, firstBuyCap],
+          args: [protocol.factory, firstBuyCap],
           gasFallback: 80_000n,
         });
       } catch (error) {
@@ -675,7 +762,7 @@ export async function launchToken({
         hash: approveHash,
       });
       if (approved.status !== "success") {
-        throw new Error("USDC approve reverted.");
+        throw new Error(`${protocol.pairSymbol} approve reverted.`);
       }
     }
   }
@@ -684,7 +771,7 @@ export async function launchToken({
   try {
     hash = await writePrepared({
       wallet,
-      address: LAUNCH_FACTORY,
+      address: protocol.factory,
       abi: launchFactoryAbi,
       functionName: "launchToken",
       args: [
@@ -702,7 +789,7 @@ export async function launchToken({
           tributeRecipient: (tribute || account) as Address,
           salt: randomSalt(),
           config: {
-            pairAsset: USDC,
+            pairAsset: protocol.pairAsset,
             fees: {
               buyTaxBps: fees.buyTaxBps,
               sellTaxBps: fees.sellTaxBps,
@@ -816,7 +903,7 @@ const pendingRewardsAbi = [
 export async function readLaunchFees(token: Address): Promise<FeeConfig | null> {
   try {
     const launch = await publicClient.readContract({
-      address: FEE_DISTRIBUTOR,
+      address: protocolOf().distributor,
       abi: feeDistributorAbi,
       functionName: "launches",
       args: [token],
@@ -829,12 +916,13 @@ export async function readLaunchFees(token: Address): Promise<FeeConfig | null> 
 }
 
 export async function readCreatorFees(token: Address, creator: Address) {
+  const protocol = protocolOf();
   const [claimableUsdc, dividends] = await Promise.all([
     publicClient.readContract({
-      address: FEE_DISTRIBUTOR,
+      address: protocol.distributor,
       abi: feeDistributorAbi,
       functionName: "claimable",
-      args: [creator, USDC],
+      args: [creator, protocol.pairAsset],
     }),
     publicClient
       .readContract({
@@ -858,7 +946,7 @@ export async function claimCreatorFees({
   try {
     const hash = await writePrepared({
       wallet,
-      address: FEE_DISTRIBUTOR,
+      address: protocolOf().distributor,
       abi: feeDistributorAbi,
       functionName: "claim",
       args: [token],
@@ -873,9 +961,49 @@ export async function claimCreatorFees({
 }
 
 export function explorerAddress(address: string) {
-  return `${ARC_EXPLORER}/address/${address}`;
+  return `${getNetwork().explorer}/address/${address}`;
 }
 
 export function explorerTx(hash: string) {
-  return `${ARC_EXPLORER}/tx/${hash}`;
+  return `${getNetwork().explorer}/tx/${hash}`;
+}
+
+const wethAbi = [
+  {
+    type: "function",
+    name: "deposit",
+    stateMutability: "payable",
+    inputs: [],
+    outputs: [],
+  },
+] as const;
+
+export async function ensureWeth(
+  wallet: ConnectedWallet,
+  account: Address,
+  needed: bigint,
+) {
+  const weth = protocolOf().pairAsset;
+  const balance = await publicClient.readContract({
+    address: weth,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [account],
+  });
+  if (balance >= needed) return;
+  const wrap = needed - balance;
+  const native = await publicClient.getBalance({ address: account });
+  if (native <= wrap) {
+    throw new Error("Not enough ETH to wrap into WETH for this buy.");
+  }
+  const hash = await writePrepared({
+    wallet,
+    address: weth,
+    abi: wethAbi,
+    functionName: "deposit",
+    value: wrap,
+    gasFallback: 80_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("WETH wrap reverted.");
 }

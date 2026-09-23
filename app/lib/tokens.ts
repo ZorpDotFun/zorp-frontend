@@ -13,11 +13,12 @@ export type Token = {
   creator: string;
   mcap: number;
   fdv: number;
+  ath: number;
   volume: number;
   price: number;
   change24h: number;
   launchedAt: number;
-  pair: "USDC";
+  pair: "USDC" | "WETH";
   hue: number;
   recentBuys: number;
   tokenIsCurrency0: boolean;
@@ -99,12 +100,58 @@ export function hasGraduated(address: string) {
   return graduatedMem.has(address.toLowerCase());
 }
 
+const ATH_KEY = "zorp-ath";
+
+function loadAth() {
+  if (typeof window === "undefined") return {} as Record<string, number>;
+  try {
+    const raw = window.localStorage.getItem(ATH_KEY);
+    const rows = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    const next: Record<string, number> = {};
+    for (const [key, value] of Object.entries(rows)) {
+      if (value > 0) next[key.toLowerCase()] = value;
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+const athMem = loadAth();
+
+export function readAth(address: string) {
+  return athMem[address.toLowerCase()] ?? 0;
+}
+
+export function noteAth(address: string, value: number) {
+  if (!(value > 0) || !address) return readAth(address);
+  const key = address.toLowerCase();
+  const next = Math.max(athMem[key] ?? 0, value);
+  if (next > (athMem[key] ?? 0)) {
+    athMem[key] = next;
+    try {
+      window.localStorage.setItem(ATH_KEY, JSON.stringify(athMem));
+    } catch {
+      /* private mode */
+    }
+  }
+  if (next >= GRADUATION_MC_USD) rememberGraduated(address);
+  return next;
+}
+
+export function tokenAth(
+  token: Pick<Token, "address" | "ath" | "fdv" | "mcap">,
+) {
+  return Math.max(readAth(token.address), token.ath ?? 0, tokenMarketCap(token));
+}
+
 export function noteMarketCap(
   address: string,
   fdv: number,
   peakFdv = fdv,
 ) {
-  if (Math.max(fdv, peakFdv) >= GRADUATION_MC_USD) rememberGraduated(address);
+  const peak = noteAth(address, Math.max(fdv, peakFdv));
+  if (peak >= GRADUATION_MC_USD) rememberGraduated(address);
 }
 
 export function impliedPeakFdv(

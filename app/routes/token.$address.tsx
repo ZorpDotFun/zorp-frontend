@@ -85,8 +85,8 @@ export default function TokenPage({ params }: Route.ComponentProps) {
       if (!graduated) {
         graduated = await launchEverGraduated(address, row.tokenIsCurrency0);
       }
+      noteMarketCap(row.address, nextFdv, Math.max(implied, printPeak));
       if (graduated) noteMarketCap(row.address, GRADUATION_MC_USD);
-      else noteMarketCap(row.address, nextFdv, implied);
       const now = Date.now() / 1000;
       const merged = mergePoints([
         { time: row.launchedAt / 1000, value: openingPriceUsd() },

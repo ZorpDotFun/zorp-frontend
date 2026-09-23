@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { erc20Abi, formatUnits, type Address } from "viem";
-import { USDC, USDC_DECIMALS } from "./addresses";
 import { publicClient } from "./factory";
+import { protocolOf } from "./networks";
+import { NETWORK_EVENT } from "./active-network";
 import { MARKET_REFRESH } from "./token-market";
 
 export function formatUsdcBalance(raw: bigint) {
-  const value = Number(formatUnits(raw, USDC_DECIMALS));
+  const value = Number(formatUnits(raw, protocolOf().pairDecimals));
   if (!Number.isFinite(value)) return "0.00";
   return value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -74,7 +75,7 @@ export function useUsdcBalance(address: Address | undefined) {
     async function load() {
       try {
         const balance = await publicClient.readContract({
-          address: USDC,
+          address: protocolOf().pairAsset,
           abi: erc20Abi,
           functionName: "balanceOf",
           args: [address as Address],
@@ -93,10 +94,12 @@ export function useUsdcBalance(address: Address | undefined) {
     void load();
     const timer = window.setInterval(() => void load(), 15_000);
     window.addEventListener(MARKET_REFRESH, load);
+    window.addEventListener(NETWORK_EVENT, load);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener(MARKET_REFRESH, load);
+      window.removeEventListener(NETWORK_EVENT, load);
     };
   }, [address]);
 

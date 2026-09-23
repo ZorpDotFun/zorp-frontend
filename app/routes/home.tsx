@@ -2,9 +2,9 @@ import type { Route } from "./+types/home";
 import { HomePage } from "../home/home-page";
 import { socialImageMeta, siteOrigin } from "../lib/site-meta";
 
-const SITE_TITLE = "Zorp : The native Arc Launchpad";
+const SITE_TITLE = "Zorp : The native launchpad";
 const SITE_DESCRIPTION =
-  "The native Arc Launchpad. Non-custodial tokens on Arc, live from block one.";
+  "The native launchpad on Arc and Robinhood. Non-custodial tokens, live from block one.";
 
 export function meta({}: Route.MetaArgs) {
   return [
