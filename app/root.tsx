@@ -5,6 +5,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
 } from "react-router";
 
 import type { Route } from "./+types/root";
@@ -37,14 +38,7 @@ export function meta({ data }: Route.MetaArgs) {
 export const links: Route.LinksFunction = () => [
   {
     rel: "preload",
-    href: "/assets/fonts/audiowide/Audiowide-Regular.woff2",
-    as: "font",
-    type: "font/woff2",
-    crossOrigin: "anonymous",
-  },
-  {
-    rel: "preload",
-    href: "/assets/fonts/satoshi/Satoshi-Regular.woff2",
+    href: "/fonts/instrument-sans.woff2",
     as: "font",
     type: "font/woff2",
     crossOrigin: "anonymous",
@@ -57,7 +51,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/assets/logos/logomark-10x.png" />
+        <link rel="icon" href="/assets/logos/z-3d.png?v=3" />
         <Meta />
         <meta property="og:image" content={OG_IMAGE} />
         <meta property="og:image:secure_url" content={OG_IMAGE} />
@@ -83,6 +77,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const hideFooter = useLocation().pathname === "/create";
   return (
     <ThemeProvider>
       <AppPrivyProvider>
@@ -91,7 +86,7 @@ export default function App() {
           <div className="flex-1">
             <Outlet />
           </div>
-          <Footer />
+          {hideFooter ? null : <Footer />}
         </div>
       </AppPrivyProvider>
     </ThemeProvider>
@@ -109,9 +104,13 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       error.status === 404
         ? "The requested page could not be found."
         : error.statusText || details;
-  } else if (import.meta.env.DEV && error && error instanceof Error) {
-    details = error.message;
-    stack = error.stack;
+  } else if (error && error instanceof Error) {
+    const leaked =
+      /https?:\/\/|quiknode|Request body:|Raw Call Arguments|Contract Call:/i.test(
+        error.message,
+      );
+    details = leaked ? "Could not load this page." : error.message;
+    if (import.meta.env.DEV && !leaked) stack = error.stack;
   }
 
   return (

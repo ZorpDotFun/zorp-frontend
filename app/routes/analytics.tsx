@@ -1,12 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Route } from "./+types/analytics";
-import { LAUNCH_FACTORY, ZORP_BUYBACK } from "../lib/addresses";
+import { RH_REVENUE_TREASURY, ZORP_BUYBACK } from "../lib/addresses";
 import { explorerAddress } from "../lib/factory";
+import { getNetwork, protocolOf } from "../lib/networks";
 import {
-  changePct,
   emptyVolumeBars,
   formatStatCount,
-  formatStatUsd,
   formatVolumeUsd,
   readCachedProtocolStats,
   subscribeProtocolStats,
@@ -15,7 +14,7 @@ import {
   type ProtocolStats,
   type VolumeInterval,
 } from "../lib/protocol-stats";
-import { formatChange } from "../lib/tokens";
+import { PageWash } from "../components/page-wash";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -34,48 +33,41 @@ export default function Analytics() {
   const [error, setError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
-    const cached = readCachedProtocolStats();
-    if (cached) setStats(cached);
+    try {
+      const cached = readCachedProtocolStats();
+      if (cached) setStats(cached);
+    } catch {
+      /* keep empty until live subscribe */
+    }
   }, []);
 
   useEffect(() => {
-    const stop = subscribeProtocolStats((next) => {
-      setStats(next);
-      setError(null);
-    });
-    return () => stop();
+    try {
+      const stop = subscribeProtocolStats((next) => {
+        setStats(next);
+        setError(null);
+      });
+      return () => stop();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load analytics.");
+    }
   }, []);
 
   const volume = stats?.volumeAll ?? 0;
   const launches = range === "24h" ? (stats?.launches24h ?? 0) : (stats?.launchesAll ?? 0);
   const fees = stats?.feesAll ?? 0;
   const claimed = stats?.creatorFeesAll ?? 0;
-  const launchDelta = changePct(stats?.launches24h ?? 0, stats?.launchesPrev24h ?? 0);
+  const rh = getNetwork().id === "robinhood";
+  const factory = protocolOf().factory;
+  const treasury = rh ? RH_REVENUE_TREASURY : ZORP_BUYBACK;
 
   return (
-    <main className="mx-auto max-w-[1180px] space-y-5 px-4 py-10 sm:px-6">
-      <section className="rounded-3xl bg-raised px-6 py-7 ring-1 ring-line sm:px-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="font-display text-[28px] tracking-wide text-ink sm:text-[32px]">
-              Protocol analytics
-            </h1>
-            <p className="mt-2 max-w-xl text-[14px] leading-6 text-muted">
-              Live on-chain reporting for Zorp launches on Robinhood and Arc.
-              Volume is the pair asset swapped through each launch pool — WETH
-              on Robinhood, USDC on Arc. Protocol fees are the 0.5% cut sent to
-              the treasury. Creator fees are the launch-tax accrued to
-              creators. Launches come from each factory.
-            </p>
-            <p className="mt-2 text-[12px] text-muted">
-              {stats && !stats.partial
-                ? `Live · updated ${new Date(stats.updatedAt).toLocaleTimeString()} · volume from factory go-live`
-                : stats
-                  ? "Live · updating figures…"
-                  : "Reading factory and pool swaps…"}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+    <PageWash>
+    <main className="mx-auto max-w-[1180px] space-y-10 px-4 pb-16 pt-6 sm:px-6">
+      <section>
+        <div className="flex flex-wrap items-end justify-between gap-6">
+          <h1 className="page-title page-title-lg">Analytics</h1>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
             <RangeChip active={range === "24h"} onClick={() => setRange("24h")}>
               24h
             </RangeChip>
@@ -83,20 +75,20 @@ export default function Analytics() {
               All time
             </RangeChip>
             <a
-              href={explorerAddress(LAUNCH_FACTORY)}
+              href={explorerAddress(factory)}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center rounded-full bg-ink px-3.5 text-[13px] font-medium text-canvas"
+              className="page-cta"
             >
-              View factory
+              Factory
             </a>
             <a
-              href={explorerAddress(ZORP_BUYBACK)}
+              href={explorerAddress(treasury)}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center rounded-full bg-surface px-3.5 text-[13px] font-medium text-ink ring-1 ring-line"
+              className="page-cta"
             >
-              View treasury
+              Treasury
             </a>
           </div>
         </div>
@@ -104,85 +96,23 @@ export default function Analytics() {
         {error ? (
           <p className="mt-8 text-[14px] text-down">{error}</p>
         ) : (
-          <div className="mt-8 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+            <Stat label="Volume" value={<AnimatedUsd value={volume} />} />
+            <Stat label="Launches" value={formatStatCount(launches)} />
             <Stat
-              label="All-time volume"
-              value={
-                <AnimatedUsd
-                  value={volume}
-                  ready={Boolean(stats?.volumeReady || volume > 0)}
-                />
-              }
-              hint="USDC swapped across all Zorp pools since factory go-live"
-              pending={!stats || !(stats.volumeReady || volume > 0)}
+              label="Creators"
+              value={formatStatCount(stats?.uniqueDevs ?? 0)}
             />
-            <Stat
-              label={range === "24h" ? "24h launches" : "All-time launches"}
-              value={stats ? formatStatCount(launches) : "—"}
-              delta={stats && range === "24h" ? launchDelta : null}
-              hint={range === "24h" ? "from prior 24h" : "factory TokenLaunched"}
-              pending={!stats}
-            />
-            <Stat
-              label="Unique token creators"
-              value={stats ? formatStatCount(stats.uniqueDevs) : "—"}
-              hint="lifetime total"
-              pending={!stats}
-            />
-            <Stat
-              label="All-time protocol fees"
-              value={
-                <AnimatedUsd
-                  value={fees}
-                  ready={Boolean(stats && (fees > 0 || !stats.partial))}
-                />
-              }
-              hint={
-                stats && stats.feesHeld > 0
-                  ? `${formatStatUsd(stats.feesHeld)} held in treasury`
-                  : "0.5% USDC swap fee since factory go-live"
-              }
-              pending={!stats || (stats.partial && fees === 0)}
-            />
-            <Stat
-              label="All-time creator fees"
-              value={
-                <AnimatedUsd
-                  value={claimed}
-                  ready={Boolean(stats && (claimed > 0 || !stats.partial))}
-                />
-              }
-              hint={
-                stats && stats.creatorFeesHeld > 0
-                  ? `${formatStatUsd(stats.creatorFeesHeld)} unclaimed`
-                  : "USDC accrued to launch creators since factory go-live"
-              }
-              pending={!stats || (stats.partial && claimed === 0)}
-            />
+            <Stat label="Protocol fees" value={<AnimatedUsd value={fees} />} />
+            <Stat label="Creator fees" value={<AnimatedUsd value={claimed} />} />
           </div>
         )}
-
-        <p className="mt-8 text-[12px] text-muted">
-          Volume, protocol fees, and creator fees are lifetime totals since
-          factory go-live. The 24h toggle only applies to launches.
-        </p>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <BarCard
-          title="All-time volume"
-          value={
-            <AnimatedUsd
-              value={volume}
-              ready={Boolean(stats?.volumeReady || volume > 0)}
-              compact
-            />
-          }
-          hint={
-            chartInterval === VOLUME_INTERVALS["30m"]
-              ? "All-time USDC swapped in Zorp pools since factory go-live, 30-minute UTC bars."
-              : "All-time USDC swapped in Zorp pools since factory go-live, 1-hour UTC bars."
-          }
+          title="Volume"
+          value={<AnimatedUsd value={volume} compact />}
           lifetime={volume}
           days={
             chartInterval === VOLUME_INTERVALS["30m"]
@@ -194,13 +124,8 @@ export default function Analytics() {
           onInterval={setChartInterval}
         />
         <BarCard
-          title="Token launches"
+          title="Launches"
           value={formatStatCount(launches)}
-          hint={
-            chartInterval === VOLUME_INTERVALS["30m"]
-              ? "Tokens created through the live factory, 30-minute UTC bars."
-              : "Tokens created through the live factory, 1-hour UTC bars."
-          }
           days={
             chartInterval === VOLUME_INTERVALS["30m"]
               ? (stats?.launch30m ?? emptyVolumeBars(VOLUME_INTERVALS["30m"]))
@@ -211,32 +136,27 @@ export default function Analytics() {
         />
       </div>
     </main>
+    </PageWash>
   );
 }
 
 function AnimatedUsd({
   value,
-  ready,
   compact,
 }: {
   value: number;
-  ready: boolean;
   compact?: boolean;
 }) {
   const shown = useRef(0);
   const started = useRef(false);
   const frame = useRef(0);
-  const [text, setText] = useState("—");
+  const [text, setText] = useState(formatVolumeUsd(0));
 
   useEffect(() => {
     const write = (amount: number) => {
       shown.current = amount;
       setText(formatVolumeUsd(amount));
     };
-    if (!ready && !(value > 0)) {
-      setText("—");
-      return;
-    }
     if (!started.current) {
       started.current = true;
       write(value);
@@ -258,7 +178,7 @@ function AnimatedUsd({
     };
     frame.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame.current);
-  }, [ready, value]);
+  }, [value]);
 
   return <span className={compact ? undefined : "tabular-nums"}>{text}</span>;
 }
@@ -266,30 +186,14 @@ function AnimatedUsd({
 function Stat({
   label,
   value,
-  delta,
-  hint,
-  pending,
 }: {
   label: string;
   value: ReactNode;
-  delta?: number | null;
-  hint: string;
-  pending?: boolean;
 }) {
-  const up = (delta ?? 0) >= 0;
   return (
     <div>
-      <p className="text-[13px] text-muted">{label}</p>
-      <p className={`mt-2 font-sans text-[34px] font-bold tracking-tight text-ink sm:text-[40px] ${pending ? "animate-pulse text-muted" : ""}`}>
-        {value}
-      </p>
-      {delta !== null && delta !== undefined ? (
-        <p className={`mt-1 text-[13px] ${up ? "text-up" : "text-down"}`}>
-          {formatChange(delta)} {hint}
-        </p>
-      ) : (
-        <p className="mt-1 text-[13px] text-muted">{hint}</p>
-      )}
+      <p className="page-lede text-[14px]">{label}</p>
+      <p className="page-title mt-2 text-[34px] sm:text-[40px]">{value}</p>
     </div>
   );
 }
@@ -302,7 +206,6 @@ function candleHeight(value: number, max: number) {
 function BarCard({
   title,
   value,
-  hint,
   days,
   money,
   lifetime,
@@ -311,7 +214,6 @@ function BarCard({
 }: {
   title: string;
   value: ReactNode;
-  hint: string;
   days: DayBucket[];
   money?: boolean;
   lifetime?: number;
@@ -338,11 +240,10 @@ function BarCard({
     <section className="rounded-3xl bg-raised px-5 py-6 ring-1 ring-line sm:px-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-[16px] font-semibold text-ink">{title}</h2>
-          <p className="mt-1 text-[12px] leading-5 text-muted">{hint}</p>
+          <h2 className="page-title text-[22px]">{title}</h2>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <p className="text-[18px] font-semibold text-ink">{value}</p>
+          <p className="page-title text-[22px]">{value}</p>
           {onInterval ? (
             <div className="flex items-center gap-1">
               <RangeChip
@@ -434,8 +335,8 @@ function RangeChip({
     <button
       type="button"
       onClick={onClick}
-      className={`h-9 rounded-full px-3.5 text-[13px] font-medium ${
-        active ? "bg-surface text-ink ring-1 ring-line" : "text-muted hover:text-ink"
+      className={`page-cta text-[14px] ${
+        active ? "text-ink" : "text-muted"
       }`}
     >
       {children}

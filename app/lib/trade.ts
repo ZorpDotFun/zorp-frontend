@@ -7,9 +7,29 @@ import {
   type Hex,
 } from "viem";
 import type { ConnectedWallet } from "@privy-io/react-auth";
-import { asError, ensureWeth, publicClient, writePrepared } from "./factory";
-import { protocolOf } from "./networks";
-import { launchPoolId, launchPoolKey, quoteWeiFromSqrt } from "./pool-price";
+import {
+  asError,
+  ensureWeth,
+  ethFromPair,
+  pairCapFromEth,
+  publicClient,
+  writePrepared,
+} from "./factory";
+import { getNetwork, protocolOf, RH_WETH } from "./networks";
+import { launchPoolId, launchPoolIdFor, launchPoolKey, launchPoolKeyFor, quoteWeiFromSqrt } from "./pool-price";
+import { isNativeEth, RH_USDG } from "./quote-tokens";
+
+const RH_V2_FACTORY = "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f" as Address;
+const RH_V2_ROUTER = "0x89e5DB8B5aA49aA85AC63f691524311AEB649eba" as Address;
+const RH_V3_ROUTER = "0xCaf681a66D020601342297493863E78C959E5cb2" as Address;
+const SLIPPAGE_HAIRCUT_BPS = 150n;
+
+export type SwapPool = {
+  pairAsset: Address;
+  fee: number;
+  tickSpacing: number;
+  hook: Address;
+};
 
 const TOKEN_DECIMALS = 18;
 const TOKEN_DECIMALS_UNIT = 10n ** 18n;
@@ -124,19 +144,39 @@ export function buyZeroForOne(tokenIsCurrency0: boolean) {
   return !tokenIsCurrency0;
 }
 
+export function swapPoolForToken(token: {
+  pairAsset?: string;
+  poolFee?: number;
+}): SwapPool | undefined {
+  if (!token.pairAsset) return undefined;
+  return {
+    pairAsset: token.pairAsset as Address,
+    fee: token.poolFee ?? 0,
+    tickSpacing: getNetwork().id === "robinhood" ? 200 : 60,
+    hook: protocolOf().hook,
+  };
+}
+
+function resolvePoolKey(token: Address, pool?: SwapPool) {
+  if (!pool) return launchPoolKey(token);
+  return launchPoolKeyFor(token, pool.pairAsset, pool.hook, pool.fee, pool.tickSpacing);
+}
+
 export async function quoteExactIn({
   token,
   tokenIsCurrency0,
   buying,
   amountIn,
+  pool,
 }: {
   token: Address;
   tokenIsCurrency0: boolean;
   buying: boolean;
   amountIn: bigint;
+  pool?: SwapPool;
 }): Promise<bigint> {
   if (amountIn <= 0n) return 0n;
-  const poolKey = launchPoolKey(token);
+  const poolKey = resolvePoolKey(token, pool);
   const zeroForOne = buying ? buyZeroForOne(tokenIsCurrency0) : tokenIsCurrency0;
   try {
     const { result } = await publicClient.simulateContract({
@@ -157,7 +197,7 @@ export async function quoteExactIn({
     const quoted = quoteFromRevert(error);
     if (quoted > 0n) return quoted;
   }
-  return quoteFromSpot(token, tokenIsCurrency0, buying, amountIn);
+  return quoteFromSpot(token, tokenIsCurrency0, buying, amountIn, pool);
 }
 
 export async function swapExactIn({
@@ -167,6 +207,7 @@ export async function swapExactIn({
   buying,
   amountIn,
   amountOutMin,
+  pool,
 }: {
   wallet: ConnectedWallet;
   token: Address;
@@ -174,19 +215,23 @@ export async function swapExactIn({
   buying: boolean;
   amountIn: bigint;
   amountOutMin: bigint;
+  pool?: SwapPool;
 }): Promise<Hex> {
   if (amountIn <= 0n) throw new Error("Enter an amount.");
   const account = wallet.address as Address;
-  const pair = protocolOf().pairAsset;
+  const pair = pool?.pairAsset ?? protocolOf().pairAsset;
   const input = buying ? pair : token;
   const output = buying ? token : pair;
   const zeroForOne = buying ? buyZeroForOne(tokenIsCurrency0) : tokenIsCurrency0;
-  const poolKey = launchPoolKey(token);
+  const poolKey = resolvePoolKey(token, pool);
 
-  if (buying && protocolOf().pairSymbol === "WETH") {
+  const nativeIn = buying && isNativeEth(pair);
+  if (buying && !nativeIn && pair.toLowerCase() === protocolOf().pairAsset.toLowerCase()) {
     await ensureWeth(wallet, account, amountIn);
   }
-  await ensurePermit2(wallet, account, input, amountIn);
+  if (!nativeIn) {
+    await ensurePermit2(wallet, account, input, amountIn);
+  }
 
   const commands = encodePacked(["uint8"], [V4_SWAP]);
   const actions = encodePacked(
@@ -252,6 +297,7 @@ export async function swapExactIn({
       abi: routerAbi,
       functionName: "execute",
       args: [commands, [v4Input], BigInt(Math.floor(Date.now() / 1000) + 180)],
+      value: nativeIn ? amountIn : 0n,
       gasFallback: 800_000n,
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -267,12 +313,16 @@ async function quoteFromSpot(
   tokenIsCurrency0: boolean,
   buying: boolean,
   amountIn: bigint,
+  pool?: SwapPool,
 ) {
+  const poolId = pool
+    ? launchPoolIdFor(token, pool.pairAsset, pool.hook, pool.fee, pool.tickSpacing)
+    : launchPoolId(token);
   const slot0 = await publicClient.readContract({
     address: protocolOf().v4StateView,
     abi: stateViewAbi,
     functionName: "getSlot0",
-    args: [launchPoolId(token)],
+    args: [poolId],
   });
   const quoteWei = quoteWeiFromSqrt(slot0[0], tokenIsCurrency0);
   if (quoteWei === 0n) return 0n;
@@ -294,10 +344,279 @@ function quoteFromRevert(error: unknown) {
   return 0n;
 }
 
-export function parseTradeAmount(value: string, buying: boolean) {
+export async function readErc20Balance(token: Address, account: Address) {
+  return publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [account],
+  });
+}
+
+export function parseTradeAmount(value: string, buying: boolean, decimals?: number) {
   const trimmed = value.trim();
   if (!trimmed || Number(trimmed) <= 0) return 0n;
-  return parseUnits(trimmed, buying ? protocolOf().pairDecimals : TOKEN_DECIMALS);
+  return parseUnits(
+    trimmed,
+    decimals ?? (buying ? protocolOf().pairDecimals : TOKEN_DECIMALS),
+  );
+}
+
+export async function quoteEthToPair(
+  pair: Address,
+  ethWei: bigint,
+  pairDecimals: number,
+) {
+  if (ethWei <= 0n) return 0n;
+  const spend = (ethWei * (10_000n - SLIPPAGE_HAIRCUT_BPS)) / 10_000n;
+  return pairCapFromEth(pair, spend, pairDecimals);
+}
+
+export async function quotePairToEth(
+  pair: Address,
+  pairAmount: bigint,
+  pairDecimals: number,
+) {
+  if (pairAmount <= 0n) return 0n;
+  return ethFromPair(pair, pairAmount, pairDecimals);
+}
+
+const fillerAbi = [
+  {
+    type: "function",
+    name: "exactOut",
+    stateMutability: "payable",
+    inputs: [
+      { name: "pair", type: "address" },
+      { name: "amountOut", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+const wethAbi = [
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "wad", type: "uint256" }],
+    outputs: [],
+  },
+] as const;
+
+const v2FactoryAbi = [
+  {
+    type: "function",
+    name: "getPair",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+    ],
+    outputs: [{ name: "pair", type: "address" }],
+  },
+] as const;
+
+const v2RouterAbi = [
+  {
+    type: "function",
+    name: "swapExactTokensForETH",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "amountOutMin", type: "uint256" },
+      { name: "path", type: "address[]" },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }],
+  },
+] as const;
+
+const v3RouterAbi = [
+  {
+    type: "function",
+    name: "exactInputSingle",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "recipient", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+] as const;
+
+export async function fillEthToPair({
+  wallet,
+  pair,
+  pairOut,
+  ethIn,
+}: {
+  wallet: ConnectedWallet;
+  pair: Address;
+  pairOut: bigint;
+  ethIn: bigint;
+}) {
+  const filler = protocolOf().filler;
+  if (!filler || filler === "0x0000000000000000000000000000000000000000") {
+    throw new Error("ETH filler is not configured.");
+  }
+  const hash = await writePrepared({
+    wallet,
+    address: filler,
+    abi: fillerAbi,
+    functionName: "exactOut",
+    args: [pair, pairOut],
+    value: ethIn,
+    gasFallback: 1_400_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("ETH fill reverted.");
+}
+
+async function approveSpend(
+  wallet: ConnectedWallet,
+  token: Address,
+  spender: Address,
+  amount: bigint,
+) {
+  const account = wallet.address as Address;
+  const allowance = await publicClient.readContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [account, spender],
+  });
+  if (allowance >= amount) return;
+  const hash = await writePrepared({
+    wallet,
+    address: token,
+    abi: erc20Abi,
+    functionName: "approve",
+    args: [spender, amount],
+    gasFallback: 80_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("Approve reverted.");
+}
+
+async function v2PairExists(tokenA: Address, tokenB: Address) {
+  try {
+    const pair = await publicClient.readContract({
+      address: RH_V2_FACTORY,
+      abi: v2FactoryAbi,
+      functionName: "getPair",
+      args: [tokenA, tokenB],
+    });
+    return pair !== "0x0000000000000000000000000000000000000000";
+  } catch {
+    return false;
+  }
+}
+
+async function unwrapWeth(wallet: ConnectedWallet, amount: bigint) {
+  const hash = await writePrepared({
+    wallet,
+    address: RH_WETH,
+    abi: wethAbi,
+    functionName: "withdraw",
+    args: [amount],
+    gasFallback: 80_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("WETH unwrap reverted.");
+}
+
+export async function unwindPairToEth({
+  wallet,
+  pair,
+  amountIn,
+  pairDecimals = 18,
+}: {
+  wallet: ConnectedWallet;
+  pair: Address;
+  amountIn: bigint;
+  pairDecimals?: number;
+}) {
+  if (amountIn <= 0n || isNativeEth(pair)) return;
+  const account = wallet.address as Address;
+  if (pair.toLowerCase() === RH_WETH.toLowerCase()) {
+    await unwrapWeth(wallet, amountIn);
+    return;
+  }
+
+  const minOut = (await quotePairToEth(pair, amountIn, pairDecimals) * 8500n) / 10_000n;
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 180);
+  const paths: Address[][] = [];
+  if (await v2PairExists(pair, RH_WETH)) paths.push([pair, RH_WETH]);
+  if (await v2PairExists(pair, RH_USDG) && (await v2PairExists(RH_USDG, RH_WETH))) {
+    paths.push([pair, RH_USDG, RH_WETH]);
+  }
+
+  for (const path of paths) {
+    try {
+      await approveSpend(wallet, pair, RH_V2_ROUTER, amountIn);
+      const hash = await writePrepared({
+        wallet,
+        address: RH_V2_ROUTER,
+        abi: v2RouterAbi,
+        functionName: "swapExactTokensForETH",
+        args: [amountIn, minOut, path, account, deadline],
+        gasFallback: 500_000n,
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === "success") return;
+    } catch {
+      // try the next venue
+    }
+  }
+
+  await approveSpend(wallet, pair, RH_V3_ROUTER, amountIn);
+  const before = await publicClient.getBalance({ address: account });
+  const wethBefore = await readErc20Balance(RH_WETH, account);
+  for (const fee of [100, 500, 3000, 10_000, 20_000, 30_000, 50_000]) {
+    try {
+      const hash = await writePrepared({
+        wallet,
+        address: RH_V3_ROUTER,
+        abi: v3RouterAbi,
+        functionName: "exactInputSingle",
+        args: [
+          {
+            tokenIn: pair,
+            tokenOut: RH_WETH,
+            fee,
+            recipient: account,
+            amountIn,
+            amountOutMinimum: minOut,
+            sqrtPriceLimitX96: 0n,
+          },
+        ],
+        gasFallback: 400_000n,
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") continue;
+      const wethAfter = await readErc20Balance(RH_WETH, account);
+      if (wethAfter > wethBefore) await unwrapWeth(wallet, wethAfter - wethBefore);
+      const after = await publicClient.getBalance({ address: account });
+      if (after > before || wethAfter > wethBefore) return;
+    } catch {
+      // try the next fee
+    }
+  }
+
+  throw new Error("Could not swap the pair back to ETH.");
 }
 
 export function minOut(quoted: bigint) {

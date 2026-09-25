@@ -13,11 +13,11 @@ export default function PrivyRoot({ children }: { children: ReactNode }) {
       appId={appId}
       {...(clientId ? { clientId } : {})}
       config={{
-        defaultChain: arcChain,
-        supportedChains: [arcChain, robinhoodChain],
+        defaultChain: robinhoodChain,
+        supportedChains: [robinhoodChain, arcChain],
         loginMethods: ["wallet"],
         appearance: {
-          theme: "dark",
+          theme: "light",
           accentColor: "#7BEC1E",
           showWalletLoginFirst: true,
           walletChainType: "ethereum-only",

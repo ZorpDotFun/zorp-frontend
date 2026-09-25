@@ -1,18 +1,24 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { Link } from "react-router";
+import { getAddress, isAddress, type Address } from "viem";
 import type { Route } from "./+types/create";
 import { usePrivyReady } from "../components/app-privy-provider";
 import {
-  GRADUATION_MC_USD,
   TARGET_FDV_USD,
   TOTAL_SUPPLY,
 } from "../lib/addresses";
-import { explorerAddress, readProtocolFeeBps } from "../lib/factory";
+import {
+  explorerAddress,
+  previewEthFirstBuy,
+  readPairToken,
+  readPairable,
+  readProtocolFeeBps,
+  type PairTokenInfo,
+} from "../lib/factory";
 import { useNetwork } from "../lib/use-network";
 import {
   FEE_MODELS,
   PROTOCOL_SWAP_FEE_BPS,
-  clampSplitBps,
   clampTaxBps,
   feeSummary,
   formatTax,
@@ -25,8 +31,16 @@ import {
 import { tokenImageDisplaySrc } from "../lib/token-image";
 import { shortenAddress } from "../lib/tokens";
 import { uploadTokenImage } from "../lib/upload-image";
-import { PercentSlider } from "../components/percent-slider";
 import type { LaunchSubmitProps } from "../components/launch-submit";
+import { QuoteTokenPicker } from "../components/quote-token-picker";
+import {
+  MIN_QUOTE_LIQUIDITY_USD,
+  RH_NATIVE_ETH,
+  RH_USDG,
+  isNativeEth,
+  readUniswapBookUsd,
+  type QuoteSectionId,
+} from "../lib/quote-tokens";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -34,7 +48,7 @@ export function meta({}: Route.MetaArgs) {
     {
       name: "description",
       content:
-        "Launch a token on Robinhood or Arc. 1B supply into a locked Uniswap v4 pool, live from block one.",
+        "Launch a token on Robinhood. 1B supply into a locked Uniswap v4 pool, live from block one.",
     },
   ];
 }
@@ -51,26 +65,150 @@ export default function CreatePage() {
   const [telegram, setTelegram] = useState("");
   const [website, setWebsite] = useState("");
   const [firstBuyUsdc, setFirstBuyUsdc] = useState("0");
+  const [payWithEth, setPayWithEth] = useState(false);
+  const [ethBuyPreview, setEthBuyPreview] = useState<string | null>(null);
+  const [quoteSection, setQuoteSection] = useState<QuoteSectionId>("currencies");
+  const [pickedPair, setPickedPair] = useState<Address>(RH_NATIVE_ETH);
+  const [customPair, setCustomPair] = useState("");
+  const [pairGate, setPairGate] = useState<{ ok: boolean; usd6: bigint } | "checking" | null>(
+    null,
+  );
+  const [uniBookUsd, setUniBookUsd] = useState<number | null>(null);
+  const [pairMeta, setPairMeta] = useState<PairTokenInfo | null>(null);
+  const [pairMetaError, setPairMetaError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [feeModel, setFeeModel] = useState<FeeModelId>("creator");
   const [fees, setFees] = useState<FeeConfig>(() => presetFees("creator"));
-  const [tributeRecipient, setTributeRecipient] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [protocolBps, setProtocolBps] = useState(PROTOCOL_SWAP_FEE_BPS);
+  const [protocolBps, setProtocolBps] = useState(
+    network.id === "robinhood" ? 100 : PROTOCOL_SWAP_FEE_BPS,
+  );
   const summary = feeSummary(fees, protocolBps);
   const feeError = validateFees(fees);
   const splitPct = splitTotal(fees) / 100;
+  const rh = network.id === "robinhood";
+  const selectedPair: Address | null = !rh
+    ? network.protocol.pairAsset
+    : quoteSection === "custom"
+      ? isAddress(customPair)
+        ? getAddress(customPair)
+        : null
+      : pickedPair;
+  const pairLabel =
+    pairMeta?.symbol ??
+    (selectedPair ? shortenAddress(selectedPair) : "Token");
+  const newTicker = ticker.trim() || "TICKER";
+  const onChainBook =
+    pairGate && pairGate !== "checking"
+      ? Math.round(Number(pairGate.usd6) / 1e6)
+      : 0;
+  const bookUsd = Math.max(onChainBook, Math.round(uniBookUsd ?? 0));
+  const dexEligible = (uniBookUsd ?? 0) >= MIN_QUOTE_LIQUIDITY_USD;
 
   useEffect(() => {
+    if (network.id === "robinhood") {
+      setProtocolBps(100);
+      return;
+    }
     void readProtocolFeeBps().then(setProtocolBps);
-  }, []);
+  }, [network.id]);
 
   useEffect(() => {
     return () => {
       if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
     };
   }, [preview]);
+
+  useEffect(() => {
+    if (!rh) {
+      setPairGate(null);
+      setPairMeta(null);
+      setPairMetaError(null);
+      setUniBookUsd(null);
+      return;
+    }
+    if (!selectedPair) {
+      setPairGate(null);
+      setPairMeta(null);
+      setPairMetaError(null);
+      setUniBookUsd(null);
+      return;
+    }
+    let cancelled = false;
+    const isEthPair =
+      isNativeEth(selectedPair) ||
+      selectedPair.toLowerCase() === network.protocol.pairAsset.toLowerCase() ||
+      selectedPair.toLowerCase() === RH_USDG.toLowerCase();
+    if (isEthPair) {
+      setPairGate({ ok: true, usd6: 0n });
+    } else {
+      setPairGate("checking");
+    }
+    setPairMeta(null);
+    setPairMetaError(null);
+    setUniBookUsd(null);
+    const timer = window.setTimeout(() => {
+      void Promise.all([
+        isNativeEth(selectedPair)
+          ? Promise.resolve({
+              address: selectedPair,
+              name: "Ether",
+              symbol: "ETH",
+              decimals: 18,
+            })
+          : readPairToken(selectedPair),
+        isEthPair ? Promise.resolve({ ok: true, usd6: 0n }) : readPairable(selectedPair),
+        isEthPair ? Promise.resolve(0) : readUniswapBookUsd(selectedPair),
+      ])
+        .then(([meta, gate, uniUsd]) => {
+          if (cancelled) return;
+          setPairMeta(meta);
+          setPairGate(gate);
+          setUniBookUsd(uniUsd);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setPairMeta(null);
+          setPairMetaError("Could not read this token.");
+          if (!isEthPair) setPairGate({ ok: false, usd6: 0n });
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [rh, selectedPair, network.protocol.pairAsset]);
+
+  useEffect(() => {
+    if (selectedPair && isNativeEth(selectedPair)) setPayWithEth(false);
+  }, [selectedPair]);
+
+  const ethFirstBuy =
+    Boolean(rh && payWithEth && selectedPair && !isNativeEth(selectedPair));
+  const firstBuyUnit = ethFirstBuy ? "ETH" : rh ? pairLabel : pair;
+
+  useEffect(() => {
+    if (!ethFirstBuy || !selectedPair || !pairMeta || Number(firstBuyUsdc) <= 0) {
+      setEthBuyPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void previewEthFirstBuy(
+        selectedPair,
+        firstBuyUsdc,
+        pairMeta.decimals,
+        pairMeta.symbol,
+      ).then((line) => {
+        if (!cancelled) setEthBuyPreview(line);
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [ethFirstBuy, selectedPair, pairMeta, firstBuyUsdc]);
 
   async function onImage(file: File | undefined) {
     if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
@@ -93,7 +231,7 @@ export default function CreatePage() {
   }
 
   return (
-    <main className="mx-auto grid max-w-[1180px] gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[1.15fr_0.85fr] lg:py-14">
+    <main className="mx-auto grid w-full max-w-[1180px] gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[minmax(0,1fr)_16.5rem] lg:items-start lg:gap-10 lg:py-12">
       <section>
         <Link
           to="/"
@@ -101,22 +239,18 @@ export default function CreatePage() {
         >
           ← Back to homepage
         </Link>
-        <p className="mt-5 text-[12px] font-medium tracking-[0.16em] text-muted uppercase">
+        <p className="mt-5 text-[13px] font-bold tracking-[0.16em] text-muted uppercase">
           /create
         </p>
-        <h1 className="mt-3 font-display text-[32px] tracking-wide text-ink sm:text-[40px]">
+        <h1 className="mt-3 font-display text-[28px] leading-snug font-semibold text-ink sm:text-[36px]">
           Launch token
         </h1>
-        <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted">
-          Every launch mints 1,000,000,000 tokens into a locked Uniswap v4{" "}
-          {pair} pool on {network.shortName} at a $3,000 FDV. Tradable from
-          the first block. Graduation market cap is $40,000.
-        </p>
         {network.protocol.deployed ? null : (
           <p className="mt-4 rounded-2xl bg-surface px-4 py-3 text-[13px] text-muted ring-1 ring-line">
-            Zorp is not live on Robinhood yet. Broadcast{" "}
-            <span className="text-ink">script/DeployRobinhood.s.sol</span>, then
-            set the <span className="text-ink">VITE_RH_*</span> addresses.
+            Zorp is not live on Robinhood yet. Set{" "}
+            <span className="text-ink">VITE_RH_LAUNCH_FACTORY</span>,{" "}
+            <span className="text-ink">VITE_RH_LAUNCH_HOOK</span>, and{" "}
+            <span className="text-ink">VITE_RH_LAUNCH_LOCKER</span>.
           </p>
         )}
 
@@ -232,19 +366,70 @@ export default function CreatePage() {
             </Field>
           </div>
 
-          <Field label="Paired asset">
-            <div className="mt-2 flex h-11 items-center justify-between rounded-2xl bg-surface px-4 text-[13px] text-ink ring-1 ring-line">
-              <span>{pair}</span>
-              <span className="text-muted">{network.protocol.pairHint}</span>
-            </div>
+          <Field label="Quote token">
+            {rh ? (
+              <div className="mt-2 space-y-3">
+                <QuoteTokenPicker
+                  selected={selectedPair}
+                  onSelect={(token) => {
+                    setPickedPair(token.address);
+                    setQuoteSection(token.section);
+                  }}
+                  customValue={customPair}
+                  onCustomChange={(value) => {
+                    setCustomPair(value);
+                    setQuoteSection("custom");
+                  }}
+                  section={quoteSection}
+                  onSectionChange={setQuoteSection}
+                />
+                {selectedPair ? (
+                  <PairPreview
+                    pairMeta={pairMeta}
+                    pairMetaError={pairMetaError}
+                    pairGate={pairGate}
+                    pairLabel={pairLabel}
+                    newTicker={newTicker}
+                    pairAddress={selectedPair}
+                    isWeth={
+                      isNativeEth(selectedPair) ||
+                      selectedPair.toLowerCase() ===
+                        network.protocol.pairAsset.toLowerCase() ||
+                      selectedPair.toLowerCase() === RH_USDG.toLowerCase()
+                    }
+                    bookUsd={bookUsd}
+                    dexEligible={dexEligible}
+                    explorer={
+                      isNativeEth(selectedPair)
+                        ? "https://app.uniswap.org/explore/tokens/robinhood/NATIVE"
+                        : explorerAddress(selectedPair)
+                    }
+                  />
+                ) : (
+                  <p className="text-[12px] text-muted">
+                    Paste a token address. The new pool will be {newTicker} / that
+                    token — not WETH.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="mt-2 flex h-11 items-center justify-between rounded-2xl bg-surface px-4 text-[13px] text-ink ring-1 ring-line">
+                <span>{pair}</span>
+                <span className="text-muted">{network.protocol.pairHint}</span>
+              </div>
+            )}
           </Field>
 
           <div className="block">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[11px] font-medium tracking-[0.16em] text-muted uppercase">
-                Dev first buy · optional
+                Dev first buy · in {firstBuyUnit}
               </span>
-              <UsdcBalanceGate />
+              {rh ? (
+                <span className="text-[12px] text-muted">{firstBuyUnit}</span>
+              ) : (
+                <UsdcBalanceGate />
+              )}
             </div>
             <div className="relative">
               <input
@@ -256,13 +441,54 @@ export default function CreatePage() {
                 className={`${inputClass} pr-16`}
               />
               <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-[13px] text-muted">
-                {pair}
+                {firstBuyUnit}
               </span>
             </div>
+            {rh && selectedPair && !isNativeEth(selectedPair) ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPayWithEth(false)}
+                  className={`rounded-2xl px-3 py-2.5 text-left ring-1 transition ${
+                    !payWithEth
+                      ? "bg-yellowell/15 ring-yellowell"
+                      : "bg-canvas ring-line hover:ring-yellowell/50"
+                  }`}
+                >
+                  <p className="text-[13px] font-bold text-ink">Pay with {pairLabel}</p>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    Spend {pairLabel} you already hold.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPayWithEth(true)}
+                  className={`rounded-2xl px-3 py-2.5 text-left ring-1 transition ${
+                    payWithEth
+                      ? "bg-yellowell/15 ring-yellowell"
+                      : "bg-canvas ring-line hover:ring-yellowell/50"
+                  }`}
+                >
+                  <p className="text-[13px] font-bold text-ink">Pay with ETH</p>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    Enter ETH. The launch buys {pairLabel}, then buys your token.
+                  </p>
+                </button>
+              </div>
+            ) : null}
+            {ethBuyPreview ? (
+              <p className="mt-2 text-[12px] text-ink">{ethBuyPreview}</p>
+            ) : null}
             <p className="mt-2 text-[12px] text-muted">
-              Leave at 0 to only deploy. A first buy pulls {pair} from your
-              wallet after an approve
-              {pair === "WETH" ? " (ETH is wrapped if needed)" : ""}.
+              {rh
+                ? selectedPair && isNativeEth(selectedPair)
+                  ? "Optional. Leave at 0 to only deploy. First buy is ETH in the same launch transaction."
+                  : payWithEth
+                    ? `Optional. Amount is ETH. Same tx: ETH → ${pairLabel} → your token. Leftover ETH comes back.`
+                    : `Optional. Amount is ${pairLabel}. The launch pulls ${pairLabel} from your wallet and buys in the same transaction.`
+                : `Leave at 0 to only deploy. A first buy pulls ${pair} from your wallet after an approve${
+                    pair === "WETH" ? " (ETH is wrapped if needed)" : ""
+                  }.`}
             </p>
           </div>
 
@@ -278,24 +504,26 @@ export default function CreatePage() {
             {advancedOpen ? (
               <div className="space-y-4 border-t border-line px-4 pb-4 pt-3">
                 <p className="text-[12px] text-muted">
-                  Buy/sell tax is 0–10%. The split of that tax must add to
-                  100%. These values are written on-chain at launch.
+                  {network.id === "robinhood"
+                    ? `Fees are the Uniswap pool fee in ${pairLabel}. Protocol is a fixed 1%. Your cut is 0–10% on top. Token tax is 0.`
+                    : "Buy/sell tax is 0–10%. The split of that tax must add to 100%. These values are written on-chain at launch."}
                 </p>
                 <div className="rounded-2xl bg-canvas px-3 py-3 ring-1 ring-line">
                   <p className="text-[12px] font-medium text-ink">
-                    Zorp protocol fee · {formatTax(protocolBps)} {pair}
+                    Zorp protocol fee · {formatTax(protocolBps)} {rh ? pairLabel : pair}
                   </p>
                   <p className="mt-1 text-[12px] leading-5 text-muted">
-                    Charged on every buy and sell, in the pair asset, on top of
-                    the tax you set. It is not taken from your split. Traders
-                    pay your tax plus this {formatTax(protocolBps)}.
-                    The Custom “Protocol” slider is a separate optional share
-                    of your tax, not this fee.
+                    {network.id === "robinhood"
+                      ? `Fixed 1% of the pool, paid in ${pairLabel}. Not a token tax. Cannot be changed after deploy.`
+                      : `Charged on every buy and sell, in the pair asset, on top of the tax you set. It is not taken from your split. Traders pay your tax plus this ${formatTax(protocolBps)}.`}
                   </p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {FEE_MODELS.map((model) => {
                     const active = feeModel === model.id;
+                    const ethHolders =
+                      model.id === "holders" &&
+                      Boolean(selectedPair && isNativeEth(selectedPair));
                     return (
                       <button
                         key={model.id}
@@ -314,130 +542,69 @@ export default function CreatePage() {
                           {model.label}
                         </p>
                         <p className="mt-1 text-[12px] text-muted">
-                          {model.blurb}
+                          {ethHolders
+                            ? "Pool fees are ETH. Your cut is wrapped to WETH and pushed to current holders at $50."
+                            : model.blurb}
                         </p>
                       </button>
                     );
                   })}
                 </div>
 
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <PercentSlider
-                    label="Buy tax"
-                    max={10}
-                    step={0.1}
-                    value={fees.buyTaxBps / 100}
-                    onChange={(value) =>
+                {network.id === "robinhood" ? (
+                  <PercentField
+                    label={
+                      feeModel === "holders"
+                        ? `Holders cut of pool fees (in ${
+                            selectedPair && isNativeEth(selectedPair)
+                              ? "WETH"
+                              : pairLabel
+                          })`
+                        : `Creator cut of pool fees (in ${pairLabel})`
+                    }
+                    valueBps={fees.buyTaxBps}
+                    onChange={(value) => {
+                      const bps = clampTaxBps(value);
                       setFees((current) => ({
                         ...current,
-                        buyTaxBps: clampTaxBps(value),
-                      }))
-                    }
+                        buyTaxBps: bps,
+                        sellTaxBps: bps,
+                      }));
+                    }}
                   />
-                  <PercentSlider
-                    label="Sell tax"
-                    max={10}
-                    step={0.1}
-                    value={fees.sellTaxBps / 100}
-                    onChange={(value) =>
-                      setFees((current) => ({
-                        ...current,
-                        sellTaxBps: clampTaxBps(value),
-                      }))
-                    }
-                  />
-                </div>
-
-                {feeModel === "custom" ? (
+                ) : (
                   <div className="grid gap-5 sm:grid-cols-2">
-                    <PercentSlider
-                      label="Creator"
-                      max={100}
-                      value={fees.creatorBps / 100}
+                    <PercentField
+                      label="Buy tax"
+                      valueBps={fees.buyTaxBps}
                       onChange={(value) =>
                         setFees((current) => ({
                           ...current,
-                          creatorBps: clampSplitBps(value),
+                          buyTaxBps: clampTaxBps(value),
                         }))
                       }
                     />
-                    <PercentSlider
-                      label="Holders"
-                      max={100}
-                      value={fees.dividendBps / 100}
+                    <PercentField
+                      label="Sell tax"
+                      valueBps={fees.sellTaxBps}
                       onChange={(value) =>
                         setFees((current) => ({
                           ...current,
-                          dividendBps: clampSplitBps(value),
-                        }))
-                      }
-                    />
-                    <PercentSlider
-                      label="Buyback"
-                      max={100}
-                      value={fees.buybackBps / 100}
-                      onChange={(value) =>
-                        setFees((current) => ({
-                          ...current,
-                          buybackBps: clampSplitBps(value),
-                        }))
-                      }
-                    />
-                    <PercentSlider
-                      label="Auto LP"
-                      max={100}
-                      value={fees.autoLpBps / 100}
-                      onChange={(value) =>
-                        setFees((current) => ({
-                          ...current,
-                          autoLpBps: clampSplitBps(value),
-                        }))
-                      }
-                    />
-                    <PercentSlider
-                      label="Tribute"
-                      max={100}
-                      value={fees.tributeBps / 100}
-                      onChange={(value) =>
-                        setFees((current) => ({
-                          ...current,
-                          tributeBps: clampSplitBps(value),
-                        }))
-                      }
-                    />
-                    <PercentSlider
-                      label="Protocol share of tax"
-                      max={100}
-                      value={fees.protocolBps / 100}
-                      onChange={(value) =>
-                        setFees((current) => ({
-                          ...current,
-                          protocolBps: clampSplitBps(value),
+                          sellTaxBps: clampTaxBps(value),
                         }))
                       }
                     />
                   </div>
-                ) : null}
-
-                {fees.tributeBps > 0 ? (
-                  <Field label="Tribute recipient">
-                    <input
-                      value={tributeRecipient}
-                      onChange={(event) =>
-                        setTributeRecipient(event.target.value)
-                      }
-                      placeholder="0x… (defaults to your wallet)"
-                      className={inputClass}
-                    />
-                  </Field>
-                ) : null}
+                )}
 
                 <p
                   className={`text-[12px] ${feeError ? "text-down" : "text-muted"}`}
                 >
                   {feeError
                     ? feeError
-                    : `Split total ${splitPct}% · ${summary.split}`}
+                    : network.id === "robinhood"
+                      ? `Traders pay 1% protocol + your ${formatTax(fees.buyTaxBps)}${feeModel === "holders" ? " to holders" : " to you"}, in ${pairLabel}.`
+                      : `Split total ${splitPct}% · ${summary.split}`}
                 </p>
               </div>
             ) : null}
@@ -453,52 +620,93 @@ export default function CreatePage() {
             website={website}
             firstBuyUsdc={firstBuyUsdc}
             fees={fees}
-            tributeRecipient={tributeRecipient}
+            tributeRecipient=""
+            pairAsset={selectedPair ?? undefined}
+            payWithEth={
+              Boolean(rh && selectedPair && !isNativeEth(selectedPair) && payWithEth)
+            }
+            pairReady={
+              !rh ||
+              (selectedPair !== null &&
+                pairMeta !== null &&
+                (isNativeEth(selectedPair) ||
+                  selectedPair.toLowerCase() ===
+                    network.protocol.pairAsset.toLowerCase() ||
+                  selectedPair.toLowerCase() === RH_USDG.toLowerCase() ||
+                  dexEligible ||
+                  (pairGate !== "checking" &&
+                    pairGate !== null &&
+                    pairGate.ok)))
+            }
           />
         </form>
       </section>
 
-      <aside className="h-fit self-start rounded-3xl bg-raised p-6 ring-1 ring-line lg:sticky lg:top-24">
-        <div className="flex items-center gap-3">
+      <aside className="h-fit self-start rounded-2xl bg-raised p-3 ring-1 ring-line lg:sticky lg:top-24">
+        <div className="flex items-center gap-2">
           {preview || tokenImageDisplaySrc(image) ? (
             <img
               src={preview || tokenImageDisplaySrc(image)}
               alt=""
-              className="size-12 rounded-xl object-cover"
+              className="size-9 rounded-lg object-cover"
             />
           ) : (
-            <div className="grid size-12 place-items-center rounded-xl bg-canvas text-muted ring-1 ring-line">
+            <div className="grid size-9 place-items-center rounded-lg bg-canvas text-muted ring-1 ring-line">
               +
             </div>
           )}
           <div>
-            <p className="text-[11px] font-medium tracking-[0.16em] text-muted uppercase">
+            <p className="text-[10px] font-medium tracking-[0.16em] text-muted uppercase">
               Your token
             </p>
-            <h2 className="font-display text-[22px] tracking-wide text-ink">
+            <h2 className="font-display text-[16px] tracking-wide text-ink">
               {ticker || "TICKER"}
             </h2>
           </div>
         </div>
-        <p className="mt-3 text-[14px] text-muted">{name || "Token name"}</p>
+        <p className="mt-2 text-[12px] text-muted">{name || "Token name"}</p>
         {description ? (
           <p className="mt-2 text-[13px] leading-6 text-muted">{description}</p>
         ) : null}
 
-        <dl className="mt-6 space-y-0">
+        <dl className="mt-3 space-y-0">
           <Row label="Supply" value={TOTAL_SUPPLY.toLocaleString()} />
           <Row label="Opening FDV" value={`$${TARGET_FDV_USD.toLocaleString()}`} />
-          <Row
-            label="Graduation MC"
-            value={`$${GRADUATION_MC_USD.toLocaleString()}`}
-          />
-          <Row label="Paired with" value={pair} />
+          <Row label="Paired with" value={pairLabel} />
+          <Row label="New pool" value={`${newTicker} / ${pairLabel}`} />
           <Row label="Network" value={network.shortName} />
           <Row label="Fee model" value={FEE_MODELS.find((model) => model.id === feeModel)?.label ?? "Custom"} />
-          <Row label="Your tax" value={summary.tax} />
-          <Row label="Zorp protocol" value={summary.protocol} />
-          <Row label="Trader pays" value={summary.effective} />
-          <Row label="Tax split" value={summary.split} />
+          {rh ? (
+            <>
+              <Row label="Your cut" value={formatTax(fees.buyTaxBps)} />
+              <Row label="Zorp protocol" value="1%" />
+              <Row
+                label="Trader pays"
+                value={`${formatTax(protocolBps + fees.buyTaxBps)} pool fee`}
+              />
+              <Row
+                label="Goes to"
+                value={feeModel === "holders" ? "Holders" : "You"}
+              />
+            </>
+          ) : (
+            <>
+              <Row label="Your tax" value={summary.tax} />
+              <Row label="Zorp protocol" value={summary.protocol} />
+              <Row label="Trader pays" value={summary.effective} />
+              <Row label="Tax split" value={summary.split} />
+            </>
+          )}
+          {Number(firstBuyUsdc) > 0 ? (
+            <Row
+              label="First buy"
+              value={
+                ethFirstBuy
+                  ? `${firstBuyUsdc} ETH → ${pairLabel}`
+                  : `${firstBuyUsdc} ${rh ? pairLabel : pair}`
+              }
+            />
+          ) : null}
           <Row label="Liquidity" value="Locked" />
           <Row label="Trading" value="Live from block one" />
           <Row
@@ -583,6 +791,131 @@ function LaunchSubmitGate(props: LaunchSubmitProps) {
 const inputClass =
   "mt-2 h-11 w-full rounded-2xl bg-surface px-4 text-[14px] text-ink outline-none ring-1 ring-line placeholder:text-muted focus:ring-yellowell";
 
+function PairPreview({
+  pairMeta,
+  pairMetaError,
+  pairGate,
+  pairLabel,
+  newTicker,
+  pairAddress,
+  isWeth,
+  bookUsd,
+  dexEligible,
+  explorer,
+}: {
+  pairMeta: PairTokenInfo | null;
+  pairMetaError: string | null;
+  pairGate: { ok: boolean; usd6: bigint } | "checking" | null;
+  pairLabel: string;
+  newTicker: string;
+  pairAddress: Address;
+  isWeth: boolean;
+  bookUsd: number | null;
+  dexEligible: boolean;
+  explorer: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-canvas px-4 py-3 ring-1 ring-line">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-display text-[18px] tracking-wide text-ink">
+            {pairMeta?.symbol ?? pairLabel}
+          </p>
+          <p className="mt-0.5 text-[13px] text-muted">
+            {pairMetaError
+              ? pairMetaError
+              : pairMeta
+                ? pairMeta.name
+                : pairGate === "checking"
+                  ? "Reading token…"
+                  : "Token"}
+          </p>
+        </div>
+        <a
+          href={explorer}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[12px] text-muted hover:text-yellowell"
+        >
+          {shortenAddress(pairAddress)}
+        </a>
+      </div>
+      <p className="mt-3 text-[13px] text-ink">
+        New book · {newTicker} / {pairMeta?.symbol ?? pairLabel}
+      </p>
+      <p className="mt-1 text-[12px] leading-5 text-muted">
+        Locked Uniswap v4 pool. Traders buy and sell against{" "}
+        {pairMeta?.symbol ?? pairLabel}
+        {isWeth ? "." : " — not WETH."} Fees are paid in{" "}
+        {pairMeta?.symbol ?? pairLabel}.
+      </p>
+      <p className="mt-2 text-[12px] text-muted">
+        {isWeth
+          ? `${pairMeta?.symbol ?? pairLabel} is always allowed.`
+          : pairGate === "checking"
+            ? "Checking if this token already trades on Uniswap…"
+            : pairGate?.ok || dexEligible
+              ? `Eligible to pair.${bookUsd && bookUsd > 0 ? ` Uniswap depth ≈ $${bookUsd.toLocaleString("en-US")}.` : ""}`
+              : "Not eligible yet. This token needs at least $5,000 of Uniswap liquidity versus ETH, WETH, or USDG."}
+      </p>
+    </div>
+  );
+}
+
+function formatPctDraft(bps: number) {
+  return (bps / 100).toFixed(bps % 100 === 0 ? 0 : 1);
+}
+
+function PercentField({
+  label,
+  valueBps,
+  onChange,
+}: {
+  label: string;
+  valueBps: number;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatPctDraft(valueBps));
+
+  useEffect(() => {
+    setDraft(formatPctDraft(valueBps));
+  }, [valueBps]);
+
+  return (
+    <label className="block">
+      <span className="text-[11px] font-medium tracking-[0.16em] text-muted uppercase">
+        {label}
+      </span>
+      <div className="relative">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          max={10}
+          step={0.1}
+          value={draft}
+          aria-label={label}
+          onChange={(event) => {
+            const next = event.target.value;
+            setDraft(next);
+            if (next === "" || next === "." || next.endsWith(".")) return;
+            onChange(next);
+          }}
+          onBlur={() => {
+            const bps = clampTaxBps(draft);
+            onChange(formatPctDraft(bps));
+            setDraft(formatPctDraft(bps));
+          }}
+          className={`${inputClass} pr-12`}
+        />
+        <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-[13px] text-muted">
+          %
+        </span>
+      </div>
+    </label>
+  );
+}
+
 function Field({
   label,
   children,
@@ -592,7 +925,7 @@ function Field({
 }) {
   return (
     <div className="block">
-      <span className="text-[11px] font-medium tracking-[0.16em] text-muted uppercase">
+      <span className="text-[13px] font-bold tracking-[0.16em] text-ink uppercase">
         {label}
       </span>
       {children}
@@ -602,7 +935,7 @@ function Field({
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-line py-2.5 text-[13px]">
+    <div className="flex items-center justify-between gap-3 border-b border-line py-1.5 text-[11px]">
       <dt className="text-muted">{label}</dt>
       <dd className="text-right text-ink">{value}</dd>
     </div>

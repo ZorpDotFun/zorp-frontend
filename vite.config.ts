@@ -6,6 +6,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const privyAppId = env.VITE_PRIVY_APP_ID || env.PRIVY_APP_ID || "";
   const privyClientId = env.VITE_PRIVY_CLIENT_ID || env.PRIVY_CLIENT_ID || "";
+  if (env.QUICKNODE_HTTPS) process.env.QUICKNODE_HTTPS = env.QUICKNODE_HTTPS;
+  if (env.VITE_RH_RPC) process.env.VITE_RH_RPC = env.VITE_RH_RPC;
 
   return {
     plugins: [tailwindcss(), reactRouter()],

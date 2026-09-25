@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type Address } from "viem";
+import { ProfileAvatar } from "./profile-avatar";
 import { explorerAddress, explorerTx } from "../lib/factory";
 import {
   fetchHolders,
@@ -8,7 +9,7 @@ import {
   type MarketHolder,
   type MarketTrade,
 } from "../lib/token-market";
-import { formatUsdPrice, shortenAddress } from "../lib/tokens";
+import { shortenAddress } from "../lib/tokens";
 
 type Tab = "trades" | "holders";
 
@@ -17,11 +18,17 @@ export function TokenMarket({
   ticker,
   tokenIsCurrency0,
   creator,
+  poolId,
+  pairAsset,
+  pairSymbol,
 }: {
   token: string;
   ticker: string;
   tokenIsCurrency0: boolean;
   creator: string;
+  poolId?: string;
+  pairAsset?: string;
+  pairSymbol?: string;
 }) {
   const [tab, setTab] = useState<Tab>("trades");
   const [trades, setTrades] = useState<MarketTrade[] | null>(null);
@@ -34,12 +41,17 @@ export function TokenMarket({
     const address = token as Address;
 
     async function loadTrades(lookback?: bigint) {
-      const nextTrades = await fetchRecentTrades(
-        address,
-        tokenIsCurrency0,
-        lookback,
-      );
-      if (!cancelled) setTrades((prev) => mergeTrades(prev, nextTrades));
+      try {
+        const nextTrades = await fetchRecentTrades(
+          address,
+          tokenIsCurrency0,
+          lookback,
+          { poolId, pairAsset },
+        );
+        if (!cancelled) setTrades((prev) => mergeTrades(prev, nextTrades));
+      } catch {
+        if (!cancelled) setTrades((prev) => prev ?? []);
+      }
     }
 
     async function loadHolders() {
@@ -77,22 +89,24 @@ export function TokenMarket({
       window.clearInterval(timer);
       window.removeEventListener(MARKET_REFRESH, onRefresh);
     };
-  }, [token, tokenIsCurrency0, creator]);
+  }, [token, tokenIsCurrency0, creator, poolId, pairAsset]);
+
+  const quote = pairSymbol || "PAIR";
 
   return (
-    <section className="overflow-hidden rounded-3xl bg-raised ring-1 ring-line">
-      <div className="flex items-center gap-1 border-b border-line px-3 py-2">
-        <TabButton active={tab === "trades"} onClick={() => setTab("trades")}>
-          Recent trades
-        </TabButton>
+    <section className="min-w-0 rounded-[24px] bg-raised px-4 ring-1 ring-line sm:px-5">
+      <div className="flex items-center gap-2 py-3">
         <TabButton active={tab === "holders"} onClick={() => setTab("holders")}>
-          Holders
+          Holders (top 100)
+        </TabButton>
+        <TabButton active={tab === "trades"} onClick={() => setTab("trades")}>
+          Trades (24h)
         </TabButton>
       </div>
 
-      <div className="max-h-[420px] overflow-y-auto">
+      <div className="max-h-[480px] overflow-y-auto">
         {tab === "trades" ? (
-          <TradeList ticker={ticker} rows={trades} />
+          <TradeList ticker={ticker} pairSymbol={quote} rows={trades} />
         ) : (
           <HolderList ticker={ticker} rows={holders} />
         )}
@@ -103,46 +117,58 @@ export function TokenMarket({
 
 function TradeList({
   ticker,
+  pairSymbol,
   rows,
 }: {
   ticker: string;
+  pairSymbol: string;
   rows: MarketTrade[] | null;
 }) {
   if (!rows) return <EmptyRow text="Loading trades…" />;
   if (rows.length === 0) return <EmptyRow text="No trades yet." />;
 
   return (
-    <ul className="divide-y divide-line/70">
-      {rows.map((row) => (
-        <li key={`${row.hash}-${row.time}`}>
-          <a
-            href={explorerTx(row.hash)}
-            target="_blank"
-            rel="noreferrer"
-            className="grid grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 text-[13px] sm:grid-cols-[minmax(0,1.4fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_88px_72px]"
-          >
-            <span className="flex min-w-0 items-center gap-2.5">
-              <SideArrow buy={row.buy} />
-              <span className="truncate font-medium text-ink">
-                {formatQty(row.tokenAmount)} {ticker}
+    <table className="w-full text-left text-[13px]">
+      <thead className="sticky top-0 bg-canvas text-[12px] text-muted">
+        <tr>
+          <th className="px-1 py-3 font-medium">Side</th>
+          <th className="px-1 py-3 font-medium">Trader</th>
+          <th className="px-1 py-3 text-right font-medium">{ticker}</th>
+          <th className="px-1 py-3 text-right font-medium">{pairSymbol}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={`${row.hash}-${row.time}`} className="border-t border-line/70">
+            <td className="px-1 py-2.5">
+              <span className={row.buy ? "font-semibold text-up" : "font-semibold text-down"}>
+                {row.buy ? "BUY" : "SELL"}
               </span>
-            </span>
-            <span className="hidden truncate text-muted sm:block">
-              {shortenAddress(row.trader)}
-            </span>
-            <span className="text-right tabular-nums text-ink">
-              {formatUsdPrice(row.usdcAmount)}
-            </span>
-            <span className="hidden text-right text-[12px] text-muted sm:block">
-              Uniswap v4
-            </span>
-            <span className="text-right tabular-nums text-muted">
-              {formatTradeAge(row.time)}
-            </span>
-          </a>
-        </li>
-      ))}
-    </ul>
+            </td>
+            <td className="px-1 py-2.5">
+              <a
+                href={explorerTx(row.hash)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 text-ink hover:text-yellowell"
+              >
+                <ProfileAvatar address={row.trader} className="size-5" />
+                {shortenAddress(row.trader)}
+                {row.venue === "Creator" ? (
+                  <span className="text-[11px] font-semibold text-muted">Dev</span>
+                ) : null}
+              </a>
+            </td>
+            <td className="px-1 py-2.5 text-right tabular-nums text-ink">
+              {formatQty(row.tokenAmount)}
+            </td>
+            <td className="px-1 py-2.5 text-right tabular-nums text-ink">
+              {formatPairQty(row.usdcAmount)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -157,36 +183,38 @@ function HolderList({
   if (rows.length === 0) return <EmptyRow text="No holders found." />;
 
   return (
-    <ul className="divide-y divide-line/70">
-      {rows.map((row) => (
-        <li key={row.address}>
-          <a
-            href={explorerAddress(row.address)}
-            target="_blank"
-            rel="noreferrer"
-            className="grid grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 text-[13px] sm:grid-cols-[minmax(0,1.4fr)_minmax(140px,1fr)_88px_72px]"
-          >
-            <span className="flex min-w-0 items-center gap-2.5">
-              <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-yellowell/15 text-[10px] font-bold text-yellowell">
-                {row.label ? row.label[0] : "W"}
-              </span>
-              <span className="truncate font-medium text-ink">
-                {formatQty(row.amount)} {ticker}
-              </span>
-            </span>
-            <span className="hidden truncate text-muted sm:block">
-              {row.label ?? shortenAddress(row.address)}
-            </span>
-            <span className="hidden text-right text-[12px] text-muted sm:block">
-              {row.label ? shortenAddress(row.address) : ""}
-            </span>
-            <span className="text-right tabular-nums text-muted">
+    <table className="w-full text-left text-[13px]">
+      <thead className="sticky top-0 bg-canvas text-[12px] text-muted">
+        <tr>
+          <th className="px-1 py-3 font-medium">Holder</th>
+          <th className="px-1 py-3 text-right font-medium">{ticker}</th>
+          <th className="px-1 py-3 text-right font-medium">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.address} className="border-t border-line/70">
+            <td className="px-1 py-2.5">
+              <a
+                href={explorerAddress(row.address)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 text-ink hover:text-yellowell"
+              >
+                <ProfileAvatar address={row.address} className="size-5" />
+                {row.label ?? shortenAddress(row.address)}
+              </a>
+            </td>
+            <td className="px-1 py-2.5 text-right tabular-nums text-ink">
+              {formatQty(row.amount)}
+            </td>
+            <td className="px-1 py-2.5 text-right tabular-nums text-muted">
               {row.share >= 10 ? row.share.toFixed(1) : row.share.toFixed(2)}%
-            </span>
-          </a>
-        </li>
-      ))}
-    </ul>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -203,8 +231,8 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full px-3 py-1.5 text-[13px] ${
-        active ? "font-medium text-ink" : "text-muted hover:text-ink"
+      className={`h-8 rounded-full px-3 text-[13px] font-semibold ${
+        active ? "bg-canvas text-ink ring-1 ring-line" : "text-muted hover:text-ink"
       }`}
     >
       {children}
@@ -212,44 +240,26 @@ function TabButton({
   );
 }
 
-function SideArrow({ buy }: { buy: boolean }) {
-  return (
-    <span
-      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
-        buy ? "bg-up/15 text-up" : "bg-down/15 text-down"
-      }`}
-      aria-hidden
-    >
-      {buy ? "↗" : "↘"}
-    </span>
-  );
-}
-
 function EmptyRow({ text }: { text: string }) {
-  return <p className="px-4 py-10 text-center text-[13px] text-muted">{text}</p>;
+  return <p className="px-1 py-10 text-[13px] text-muted">{text}</p>;
 }
 
-function formatTradeAge(ts: number) {
-  const delta = Math.max(0, Date.now() - ts);
-  const secs = Math.floor(delta / 1000);
-  if (secs < 60) return `${Math.max(1, secs)}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+function formatPairQty(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1) {
+    return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
+  }
+  return value.toLocaleString("en-US", { maximumSignificantDigits: 6 });
 }
 
 function mergeTrades(prev: MarketTrade[] | null, next: MarketTrade[]) {
-  const seen = new Set<string>();
-  const out: MarketTrade[] = [];
-  for (const row of [...next, ...(prev ?? [])]) {
+  const byHash = new Map<string, MarketTrade>();
+  for (const row of [...(prev ?? []), ...next]) {
     const key = row.hash.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
+    const existing = byHash.get(key);
+    if (!existing || row.venue === "Creator") byHash.set(key, row);
   }
-  return out.sort((a, b) => b.time - a.time).slice(0, 50);
+  return [...byHash.values()].sort((a, b) => b.time - a.time).slice(0, 50);
 }
 
 function formatQty(value: number) {

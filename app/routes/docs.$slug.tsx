@@ -10,7 +10,7 @@ export function meta({ params }: Route.MetaArgs) {
       name: "description",
       content: item
         ? `${item.title} in the Zorp docs.`
-        : "How Zorp launches and trades tokens on Arc.",
+        : "How Zorp launches any-pair tokens on Robinhood Chain.",
     },
   ];
 }

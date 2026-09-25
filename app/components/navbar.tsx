@@ -1,11 +1,14 @@
 import { useEffect, useId, useState } from "react";
-import { Link, NavLink, useLocation } from "react-router";
-import { ChainSwitch } from "./chain-switch";
+import { createPortal } from "react-dom";
+import { Link, useLocation } from "react-router";
+import { RobinhoodWalletSync } from "./chain-switch";
 import { ConnectWallet } from "./connect-wallet";
+import { ZorpMark } from "./zorp-mark";
 import { useTheme } from "../lib/theme";
 
 const NAV_LINKS = [
   { to: "/", label: "Home", end: true },
+  { to: "/explore", label: "Explore" },
   { to: "/create", label: "Create" },
   { to: "/docs", label: "Docs" },
   { to: "/analytics", label: "Analytics" },
@@ -44,21 +47,17 @@ export function Navbar() {
   }, [open]);
 
   return (
-    <header className="sticky top-0 z-50 bg-transparent px-3 pt-3 sm:px-6">
-      <div className="nav-shell relative z-50 mx-auto flex h-14 max-w-[1180px] items-center justify-between rounded-2xl px-4 ring-1 ring-line sm:px-5">
-        <Link to="/" className="relative z-10 flex items-center gap-1.5">
-          <img
-            src="/assets/logos/logomark-10x.png"
-            alt="Zorp"
-            className="size-9 rounded-lg object-cover"
-          />
-          <span className="font-display text-[18px] leading-none tracking-[0.16em] text-ink">
+    <header className="relative z-[100] px-3 pt-6 sm:px-6">
+      <div className="nav-shell relative z-50 mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between gap-2 overflow-visible px-1 sm:gap-3 sm:px-2">
+        <Link to="/" className="relative z-10 flex min-w-0 shrink items-center gap-2.5">
+          <ZorpMark className="size-11 shrink-0 sm:size-12" />
+          <span className="hidden font-display text-[22px] leading-none font-semibold tracking-wide text-ink sm:inline">
             ZORP
           </span>
         </Link>
 
         <nav
-          className="relative z-10 hidden items-center gap-5 lg:flex"
+          className="relative z-10 hidden items-center gap-8 lg:flex"
           aria-label="Primary"
         >
           {NAV_LINKS.map((link) => (
@@ -66,28 +65,42 @@ export function Navbar() {
           ))}
         </nav>
 
-        <div className="relative z-10 flex items-center gap-2 sm:gap-3">
-          <ChainSwitch />
+        <div className="relative z-10 flex shrink-0 items-center gap-1 sm:gap-3">
+          <RobinhoodWalletSync />
           <button
             type="button"
             onClick={toggle}
-            className="relative flex h-9 w-[68px] items-center rounded-full bg-surface ring-1 ring-line transition-colors"
+            className="relative hidden h-10 w-[76px] items-center rounded-full bg-surface ring-1 ring-line transition-colors md:flex"
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
           >
             <span
-              className={`absolute top-1 left-1 grid size-7 place-items-center rounded-full bg-ink text-canvas shadow-sm transition-transform duration-300 ${
-                theme === "light" ? "translate-x-[30px]" : "translate-x-0"
+              className={`absolute top-1 left-1 grid size-8 place-items-center rounded-full bg-ink text-canvas shadow-sm transition-transform duration-300 ${
+                theme === "light" ? "translate-x-[34px]" : "translate-x-0"
               }`}
             >
               {theme === "dark" ? <MoonIcon /> : <SunIcon />}
             </span>
           </button>
 
-          <ConnectWallet />
+          <span className="md:hidden">
+            <ConnectWallet compact />
+          </span>
+          <span className="hidden md:inline-flex">
+            <ConnectWallet />
+          </span>
 
           <button
             type="button"
-            className="grid size-9 place-items-center rounded-full bg-surface text-ink ring-1 ring-line lg:hidden"
+            onClick={toggle}
+            className="grid size-10 shrink-0 place-items-center rounded-full bg-surface text-ink ring-1 ring-line md:hidden"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          >
+            {theme === "dark" ? <MoonIcon /> : <SunIcon />}
+          </button>
+
+          <button
+            type="button"
+            className="grid size-10 shrink-0 place-items-center rounded-full bg-surface text-ink ring-1 ring-line lg:hidden"
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
             aria-controls={menuId}
@@ -101,33 +114,47 @@ export function Navbar() {
         </div>
       </div>
 
-      {shown ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close menu"
-            className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ease-out ${
-              open ? "opacity-100" : "opacity-0"
-            }`}
-            onClick={() => setOpen(false)}
-          />
-          <nav
-            id={menuId}
-            aria-label="Mobile"
-            onTransitionEnd={(event) => {
-              if (event.target !== event.currentTarget) return;
-              if (!open) setShown(false);
-            }}
-            className={`absolute inset-y-0 right-0 flex w-[min(20rem,86vw)] flex-col gap-1 bg-black px-5 pt-24 pb-8 shadow-[-24px_0_48px_rgba(0,0,0,0.45)] ring-1 ring-white/10 transition-transform duration-300 ease-out motion-reduce:transition-none ${
-              open ? "translate-x-0" : "translate-x-full"
-            }`}
-          >
-            {NAV_LINKS.map((link) => (
-              <NavItem key={link.to} {...link} mobile />
-            ))}
-          </nav>
-        </div>
-      ) : null}
+      {shown
+        ? createPortal(
+            <div className="fixed inset-0 z-[80] lg:hidden">
+              <button
+                type="button"
+                aria-label="Close menu"
+                className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ease-out ${
+                  open ? "opacity-100" : "opacity-0"
+                }`}
+                onClick={() => setOpen(false)}
+              />
+              <nav
+                id={menuId}
+                aria-label="Mobile"
+                onTransitionEnd={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (!open) setShown(false);
+                }}
+                className={`absolute inset-y-0 right-0 flex w-[min(20rem,86vw)] flex-col gap-1 bg-canvas px-5 pt-6 pb-8 shadow-[-24px_0_48px_rgba(0,0,0,0.45)] ring-1 ring-line transition-transform duration-300 ease-out motion-reduce:transition-none ${
+                  open ? "translate-x-0" : "translate-x-full"
+                }`}
+              >
+                <div className="mb-6 flex items-center justify-between">
+                  <span className="text-[13px] font-semibold text-muted">Menu</span>
+                  <button
+                    type="button"
+                    className="grid size-9 place-items-center rounded-full bg-surface text-ink ring-1 ring-line"
+                    aria-label="Close menu"
+                    onClick={() => setOpen(false)}
+                  >
+                    <HamburgerIcon open />
+                  </button>
+                </div>
+                {NAV_LINKS.map((link) => (
+                  <NavItem key={link.to} {...link} mobile />
+                ))}
+              </nav>
+            </div>,
+            document.body,
+          )
+        : null}
     </header>
   );
 }
@@ -143,22 +170,29 @@ function NavItem({
   end?: boolean;
   mobile?: boolean;
 }) {
+  const location = useLocation();
+  const active = end
+    ? location.pathname === to
+    : to === "/"
+      ? location.pathname === "/"
+      : location.pathname === to || location.pathname.startsWith(`${to}/`);
+
   return (
-    <NavLink
+    <Link
       to={to}
-      end={end}
-      className={({ isActive }) =>
+      reloadDocument={to === "/analytics"}
+      className={
         mobile
-          ? `rounded-xl px-3 py-3 text-[16px] font-medium text-white transition ${
-              isActive ? "bg-white/10" : "hover:bg-white/10"
+          ? `relative z-[110] rounded-xl px-3 py-3 text-[16px] font-medium text-ink transition ${
+              active ? "bg-surface" : "hover:bg-surface"
             }`
-          : `text-[13px] font-medium transition ${
-              isActive ? "text-ink" : "text-ink/80 hover:text-ink"
+          : `relative z-[110] text-[16px] font-semibold transition ${
+              active ? "text-ink" : "text-ink/55 hover:text-ink"
             }`
       }
     >
       {label}
-    </NavLink>
+    </Link>
   );
 }
 

@@ -2,9 +2,9 @@ import type { Route } from "./+types/home";
 import { HomePage } from "../home/home-page";
 import { socialImageMeta, siteOrigin } from "../lib/site-meta";
 
-const SITE_TITLE = "Zorp : The native launchpad";
+const SITE_TITLE = "Zorp : Launch tokens paired with anything";
 const SITE_DESCRIPTION =
-  "The native launchpad on Robinhood and Arc. Non-custodial tokens, live from block one.";
+  "The Robinhood launchpad. Pair a new coin with any liquid token. Locked Uniswap v4. Live from block one.";
 
 export function meta({}: Route.MetaArgs) {
   return [

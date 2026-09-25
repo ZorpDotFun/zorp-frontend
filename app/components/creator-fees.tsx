@@ -7,14 +7,15 @@ import {
 } from "@privy-io/react-auth";
 import { useEffect, useState } from "react";
 import { formatUnits, type Address } from "viem";
-import { protocolOf } from "../lib/networks";
 import {
   claimCreatorFees,
   explorerAddress,
   explorerTx,
-  readCreatorFees,
+  pairLabel,
   readLaunchFees,
 } from "../lib/factory";
+import { knownPairSymbol } from "../lib/quote-tokens";
+import { readRhFeeEstimate } from "../lib/uncollected-fees";
 import { paysCreator } from "../lib/fee-models";
 import { openWalletAuth } from "../lib/privy-wallet";
 import { shortenAddress } from "../lib/tokens";
@@ -23,9 +24,13 @@ import { usePrivyReady } from "./app-privy-provider";
 export function CreatorFees({
   token,
   creator,
+  pair,
+  pairAsset: pairHint,
 }: {
   token: string;
   creator: string;
+  pair?: string;
+  pairAsset?: string;
 }) {
   const privyReady = usePrivyReady();
   const { wallets } = useWallets();
@@ -35,18 +40,33 @@ export function CreatorFees({
     Boolean(wallet?.address) &&
     wallet.address.toLowerCase() === creator.toLowerCase();
   const [raw, setRaw] = useState<bigint | null>(null);
+  const [decimals, setDecimals] = useState(18);
+  const [pairSymbol, setPairSymbol] = useState(
+    () => (pairHint ? knownPairSymbol(pairHint) : null) ?? pair ?? "…",
+  );
   const [creatorShare, setCreatorShare] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const [value, fees] = await Promise.all([
-          readCreatorFees(token as Address, creator as Address),
+        const [estimate, fees] = await Promise.all([
+          readRhFeeEstimate(token as Address, creator as Address),
           readLaunchFees(token as Address),
         ]);
         if (cancelled) return;
+        const value = estimate ? estimate.claimablePair + estimate.creatorPair : 0n;
         setRaw(value);
+        setDecimals(estimate?.pairDecimals ?? 18);
+        const asset = estimate?.pairAsset ?? (pairHint as Address | undefined) ?? null;
+        if (asset) {
+          const known = knownPairSymbol(asset);
+          const label = known ?? (await pairLabel(asset));
+          if (cancelled) return;
+          setPairSymbol(label);
+        } else if (pair) {
+          setPairSymbol(pair);
+        }
         setCreatorShare(fees ? paysCreator(fees) : value > 0n);
       } catch {
         if (!cancelled) {
@@ -63,13 +83,13 @@ export function CreatorFees({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [token, creator]);
+  }, [token, creator, pair, pairHint]);
 
   if (!privyReady || !isCreator) return null;
   if (creatorShare === false && (raw == null || raw === 0n)) return null;
   if (creatorShare === null && raw == null) return null;
 
-  const amount = formatClaimable(raw);
+  const amount = formatClaimable(raw, decimals, pairSymbol);
 
   return (
     <section className="rounded-3xl bg-raised px-5 py-5 ring-1 ring-line">
@@ -85,32 +105,22 @@ export function CreatorFees({
         />
       </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <div>
-          <p className="font-display text-[22px] tracking-wide text-ink">{amount}</p>
-          <p className="mt-1 text-[13px] text-muted">
-            Unclaimed creator tax for ${shortenAddress(token)}
-          </p>
-        </div>
-        <div className="sm:text-right">
-          <p className="font-display text-[22px] tracking-wide text-ink">{amount}</p>
-          <p className="mt-1 text-[13px] text-muted">
-            Claimable now, paid to{" "}
-            <a
-              href={explorerAddress(creator)}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-yellowell"
-            >
-              {shortenAddress(creator)}
-            </a>
-          </p>
-        </div>
+      <div className="mt-4">
+        <p className="font-display text-[22px] tracking-wide text-ink">{amount}</p>
+        <p className="mt-1 text-[13px] text-muted">
+          Your creator share only — not the protocol 1%. Claim collects the
+          pool and pays{" "}
+          <a
+            href={explorerAddress(creator)}
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-yellowell"
+          >
+            {shortenAddress(creator)}
+          </a>{" "}
+          in {pairSymbol}.
+        </p>
       </div>
-
-      <p className="mt-4 text-[13px] text-muted">
-        Payable to {shortenAddress(creator)}. Connect that wallet to claim.
-      </p>
     </section>
   );
 }
@@ -199,11 +209,10 @@ function CreatorClaim({
   );
 }
 
-function formatClaimable(raw: bigint | null) {
+function formatClaimable(raw: bigint | null, decimals = 18, symbol: string) {
   if (raw == null) return "…";
-  const protocol = protocolOf();
-  return `${Number(formatUnits(raw, protocol.pairDecimals)).toLocaleString("en-US", {
+  return `${Number(formatUnits(raw, decimals)).toLocaleString("en-US", {
     minimumFractionDigits: 2,
-    maximumFractionDigits: protocol.pairDecimals > 6 ? 6 : 2,
-  })} ${protocol.pairSymbol}`;
+    maximumFractionDigits: decimals > 6 ? 6 : 2,
+  })} ${symbol}`;
 }

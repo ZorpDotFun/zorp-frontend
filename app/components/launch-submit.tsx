@@ -7,6 +7,7 @@ import {
 } from "@privy-io/react-auth";
 import { useState } from "react";
 import { Link } from "react-router";
+import type { Address } from "viem";
 import { explorerAddress, explorerTx, launchToken } from "../lib/factory";
 import { validateFees, type FeeConfig } from "../lib/fee-models";
 import { openWalletAuth } from "../lib/privy-wallet";
@@ -29,6 +30,9 @@ export type LaunchSubmitProps = {
   firstBuyUsdc: string;
   fees: FeeConfig;
   tributeRecipient: string;
+  pairAsset?: Address;
+  pairReady?: boolean;
+  payWithEth?: boolean;
 };
 
 export function LaunchSubmit(props: LaunchSubmitProps) {
@@ -54,6 +58,9 @@ function LaunchSubmitLive({
   firstBuyUsdc,
   fees,
   tributeRecipient,
+  pairAsset,
+  pairReady = true,
+  payWithEth = false,
 }: LaunchSubmitProps) {
   const { ready, authenticated } = usePrivy();
   const { wallets } = useWallets();
@@ -84,6 +91,10 @@ function LaunchSubmitLive({
       setError("Name and ticker are required.");
       return;
     }
+    if (!pairReady) {
+      setError("Pick a pair with at least $5,000 of Uniswap liquidity versus ETH, WETH, or USDG.");
+      return;
+    }
     const feeError = validateFees(fees);
     if (feeError) {
       setError(feeError);
@@ -105,6 +116,8 @@ function LaunchSubmitLive({
         firstBuyUsdc,
         fees,
         tributeRecipient,
+        pairAsset,
+        payWithEth,
       });
       setResult(launched);
       setStatus("done");

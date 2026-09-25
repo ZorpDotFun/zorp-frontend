@@ -1,5 +1,6 @@
 import { Link, NavLink } from "react-router";
 import { XIcon } from "./social-icons";
+import { ZorpMark } from "./zorp-mark";
 
 const SOCIALS = [
   {
@@ -11,21 +12,17 @@ const SOCIALS = [
 
 export function Footer() {
   return (
-    <footer className="mt-16 px-3 pb-6 sm:px-6">
+    <footer className="mt-20 px-3 pb-8 sm:mt-28 sm:px-6">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-5 rounded-2xl px-4 py-5 ring-1 ring-line sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-          <Link to="/" className="flex items-center gap-1.5">
-            <img
-              src="/assets/logos/logomark-10x.png"
-              alt="Zorp"
-              className="size-8 rounded-lg object-cover"
-            />
-            <span className="font-display text-[16px] leading-none tracking-[0.16em] text-ink">
+          <Link to="/" className="flex items-center gap-2">
+            <ZorpMark className="size-9" />
+            <span className="font-display text-[18px] leading-none text-ink">
               ZORP
             </span>
           </Link>
           <p className="text-[13px] text-muted">
-            Launch coins on Robinhood and Arc via zorpdotfun.com
+            Launch coins on Robinhood via zorpdotfun.com
           </p>
         </div>
 
@@ -40,6 +37,16 @@ export function Footer() {
             }
           >
             Home
+          </NavLink>
+          <NavLink
+            to="/explore"
+            className={({ isActive }) =>
+              `text-[13px] font-medium transition ${
+                isActive ? "text-ink" : "text-muted hover:text-ink"
+              }`
+            }
+          >
+            Explore
           </NavLink>
           <NavLink
             to="/create"
@@ -61,16 +68,13 @@ export function Footer() {
           >
             Docs
           </NavLink>
-          <NavLink
+          <Link
             to="/analytics"
-            className={({ isActive }) =>
-              `text-[13px] font-medium transition ${
-                isActive ? "text-ink" : "text-muted hover:text-ink"
-              }`
-            }
+            reloadDocument
+            className="text-[13px] font-medium text-muted transition hover:text-ink"
           >
             Analytics
-          </NavLink>
+          </Link>
           {SOCIALS.map(({ label, href, icon: Icon }) => (
             <a
               key={label}

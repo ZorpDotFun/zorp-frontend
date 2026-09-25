@@ -7,6 +7,11 @@ import {
   LAUNCH_HOOK,
   LAUNCH_LOCKER,
   PERMIT2,
+  RH_ETH_FILLER,
+  RH_FEE_VAULT,
+  RH_LAUNCH_FACTORY,
+  RH_LAUNCH_HOOK,
+  RH_LAUNCH_LOCKER,
   TIMELOCK,
   USDC,
   USDC_DECIMALS,
@@ -23,9 +28,9 @@ import {
   ARC_RPCS,
   ROBINHOOD_CHAIN_ID,
   ROBINHOOD_EXPLORER,
-  ROBINHOOD_RPCS,
   arcChain,
   robinhoodChain,
+  robinhoodTransport,
   rpcTransport,
 } from "./chains";
 
@@ -37,6 +42,8 @@ export type ProtocolAddresses = {
   buyback: Address;
   distributor: Address;
   locker: Address;
+  vault: Address;
+  filler: Address;
   council: Address;
   timelock: Address;
   pairAsset: Address;
@@ -81,8 +88,6 @@ function isLive(address: Address) {
 
 export const RH_WETH = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
 
-const rhFactory = envAddr(import.meta.env.VITE_RH_LAUNCH_FACTORY, ZERO);
-
 export const NETWORKS: Record<NetworkId, Network> = {
   arc: {
     id: "arc",
@@ -99,6 +104,8 @@ export const NETWORKS: Record<NetworkId, Network> = {
       buyback: ZORP_BUYBACK,
       distributor: FEE_DISTRIBUTOR,
       locker: LAUNCH_LOCKER,
+      vault: ZERO,
+      filler: ZERO,
       council: COUNCIL,
       timelock: TIMELOCK,
       pairAsset: USDC,
@@ -121,14 +128,16 @@ export const NETWORKS: Record<NetworkId, Network> = {
     name: "Robinhood Chain",
     shortName: "Robinhood",
     explorer: ROBINHOOD_EXPLORER,
-    dexSlug: "robinhoodchain",
+    dexSlug: "robinhood",
     apiEnabled: false,
     protocol: {
-      factory: rhFactory,
-      hook: envAddr(import.meta.env.VITE_RH_LAUNCH_HOOK, ZERO),
+      factory: RH_LAUNCH_FACTORY,
+      hook: RH_LAUNCH_HOOK,
       buyback: envAddr(import.meta.env.VITE_RH_BUYBACK, ZERO),
       distributor: envAddr(import.meta.env.VITE_RH_FEE_DISTRIBUTOR, ZERO),
-      locker: envAddr(import.meta.env.VITE_RH_LAUNCH_LOCKER, ZERO),
+      locker: RH_LAUNCH_LOCKER,
+      vault: RH_FEE_VAULT,
+      filler: RH_ETH_FILLER,
       council: envAddr(import.meta.env.VITE_RH_COUNCIL, ZERO),
       timelock: envAddr(import.meta.env.VITE_RH_TIMELOCK, ZERO),
       pairAsset: RH_WETH,
@@ -139,9 +148,9 @@ export const NETWORKS: Record<NetworkId, Network> = {
       v4PositionManager: getAddress("0x58daec3116aae6D93017bAAea7749052E8a04fA7"),
       v4StateView: getAddress("0xF3334192D15450CdD385c8B70e03f9A6bD9E673b"),
       v4Quoter: getAddress("0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94"),
-      v4UniversalRouter: getAddress("0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99"),
+      v4UniversalRouter: getAddress("0x8876789976dEcBfCbBbe364623C63652db8C0904"),
       permit2: PERMIT2,
-      deployed: isLive(rhFactory),
+      deployed: isLive(RH_LAUNCH_FACTORY),
     },
   },
 };
@@ -153,7 +162,7 @@ const clients = {
   }),
   robinhood: createPublicClient({
     chain: robinhoodChain,
-    transport: rpcTransport(ROBINHOOD_RPCS),
+    transport: robinhoodTransport(),
   }),
 };
 

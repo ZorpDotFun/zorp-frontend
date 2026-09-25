@@ -15,6 +15,10 @@ interface ImportMetaEnv {
   readonly VITE_RH_BUYBACK: string;
   readonly VITE_RH_FEE_DISTRIBUTOR: string;
   readonly VITE_RH_LAUNCH_LOCKER: string;
+  readonly VITE_RH_FEE_VAULT: string;
+  readonly VITE_RH_LIQUIDITY_GATE: string;
+  readonly VITE_RH_FILLER: string;
+  readonly VITE_RH_REVENUE_TREASURY: string;
   readonly VITE_RH_COUNCIL: string;
   readonly VITE_RH_TIMELOCK: string;
 }

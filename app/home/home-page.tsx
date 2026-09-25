@@ -1,27 +1,20 @@
-import { ExploreSection } from "../components/explore-section";
-import { GraduatedSection } from "../components/graduated-section";
-import { tokenHasGraduated } from "../lib/tokens";
+import { HomeHero } from "../components/home-hero";
+import { HowItWorks } from "../components/how-it-works";
+import { TrendingTokens } from "../components/trending-tokens";
 import { useLaunches } from "../lib/use-launches";
 
 export function HomePage() {
   const launches = useLaunches();
-  const exploring = launches.tokens.filter((token) => !tokenHasGraduated(token));
-  const graduated = launches.tokens.filter((token) => tokenHasGraduated(token));
 
   return (
-    <div className="relative">
-      <div className="relative space-y-14 pt-8">
-        <GraduatedSection
-          tokens={graduated}
-          loading={launches.loading && launches.tokens.length === 0}
-          error={launches.error}
-        />
-        <ExploreSection
-          tokens={exploring}
-          loading={launches.loading && launches.tokens.length === 0}
-          error={launches.error}
-        />
-      </div>
+    <div className="relative flex flex-col gap-8 sm:gap-10">
+      <HomeHero />
+      <TrendingTokens
+        tokens={launches.tokens}
+        loading={launches.loading && launches.tokens.length === 0}
+        error={launches.error}
+      />
+      <HowItWorks />
     </div>
   );
 }

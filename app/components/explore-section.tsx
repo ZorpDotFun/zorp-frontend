@@ -1,17 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import {
-  formatAge,
-  formatChange,
-  formatUsd,
-  shortenAddress,
-  tokenAth,
-  tokenMarketCap,
-  type Token,
-} from "../lib/tokens";
-import { GraduationMeter } from "./graduation-meter";
-import { SocialIcons } from "./social-icons";
-import { TokenArt } from "./token-art";
+import { type Token } from "../lib/tokens";
+import { TokenCard } from "./token-card";
 
 type SortKey =
   | "newest"
@@ -131,19 +121,19 @@ export function ExploreSection({
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex items-center gap-2.5">
-            <h2 className="font-display text-[22px] tracking-wide text-ink sm:text-[26px]">
+            <h1 className="font-display text-[26px] text-ink sm:text-[32px]">
               Explore
-            </h2>
+            </h1>
             <span className="text-[12px] text-muted">
               {filtered.length.toLocaleString()} launched
             </span>
           </div>
           <p className="mt-1 text-[13px] text-muted">
-            Live on Uniswap v4. Graduation at $40k market cap.
+            Live on Uniswap v4 from block one.
           </p>
         </div>
 
-        <div className="flex flex-1 flex-col gap-2 sm:flex-row lg:max-w-[520px]">
+        <div className="flex flex-1 flex-col gap-2 sm:flex-row lg:max-w-[640px]">
           <label className="relative flex-1">
             <span className="sr-only">Search a token or paste a CA</span>
             <span className="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-muted">
@@ -189,6 +179,13 @@ export function ExploreSection({
               </ul>
             ) : null}
           </div>
+          <Link
+            to="/create"
+            className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-yellowell px-4 text-[13px] font-bold text-black transition hover:brightness-110"
+          >
+            <PlusIcon />
+            Create
+          </Link>
         </div>
       </div>
 
@@ -283,9 +280,9 @@ export function ExploreSection({
           )}
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-[repeat(auto-fill,minmax(268px,1fr))]">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           {filtered.map((token) => (
-            <ExploreCard key={token.id} token={token} />
+            <TokenCard key={token.id} token={token} />
           ))}
         </div>
       )}
@@ -317,61 +314,16 @@ function Chip({
   );
 }
 
-function ExploreCard({ token }: { token: Token }) {
-  const up = token.change24h >= 0;
-
+function PlusIcon() {
   return (
-    <article className="group flex flex-col rounded-2xl bg-raised p-2 ring-1 ring-line transition duration-300 hover:-translate-y-0.5 hover:ring-yellowell/50 sm:min-h-[360px] sm:p-2.5">
-      <div className="relative overflow-hidden rounded-xl">
-        <TokenArt
-          ticker={token.ticker}
-          hue={token.hue}
-          image={token.image}
-          className="aspect-square w-full"
-        />
-        <span className="absolute left-2 top-2 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white backdrop-blur-sm">
-          LIVE
-        </span>
-      </div>
-      <div className="flex flex-1 flex-col px-1 pt-2.5 pb-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-bold text-ink">{token.name}</p>
-            <p className="truncate text-[11px] text-muted">
-              ${token.ticker}/{token.pair}
-            </p>
-          </div>
-          <SocialIcons
-            twitter={token.twitter}
-            telegram={token.telegram}
-            website={token.website}
-          />
-        </div>
-        <div className="mt-1.5 flex items-center justify-between text-[11px]">
-          <span className="font-medium text-ink">{formatUsd(tokenMarketCap(token))}</span>
-          <span className={up ? "text-up" : "text-down"}>
-            {formatChange(token.change24h)}
-          </span>
-        </div>
-        <p className="mt-1 text-[11px] text-muted">
-          ATH <span className="font-medium text-ink">{formatUsd(tokenAth(token))}</span>
-        </p>
-        <GraduationMeter
-          mc={tokenMarketCap(token)}
-          address={token.address}
-          className="mt-1.5"
-        />
-        <p className="mt-1.5 truncate font-mono text-[10px] text-muted">
-          {shortenAddress(token.address)} · {formatAge(token.launchedAt)}
-        </p>
-        <Link
-          to={`/token/${token.address}`}
-          className="mt-auto grid h-8 w-full place-items-center rounded-full bg-ink text-[12px] font-bold text-canvas transition group-hover:bg-yellowell group-hover:text-black"
-        >
-          View ${token.ticker}
-        </Link>
-      </div>
-    </article>
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M7 1.25v11.5M1.25 7h11.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

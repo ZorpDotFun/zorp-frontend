@@ -1,59 +1,47 @@
 import type { ReactNode } from "react";
 import {
-  COUNCIL,
-  FEE_DISTRIBUTOR,
-  GRADUATION_MC_USD,
-  LAUNCH_FACTORY,
-  LAUNCH_HOOK,
-  LAUNCH_LOCKER,
-  TARGET_FDV_USD,
-  TIMELOCK,
-  TOTAL_SUPPLY,
-  USDC,
-  V4_POOL_MANAGER,
-  V4_QUOTER,
-  V4_STATE_VIEW,
-  V4_UNIVERSAL_ROUTER,
-  ZORP_BUYBACK,
-} from "./addresses";
-import { ARC_CHAIN_ID, ARC_EXPLORER, ARC_RPC_PRIMARY } from "./chains";
-import { explorerAddress } from "./factory";
+  Architecture,
+  FeeSplit,
+  Lead,
+  LiquidityCircuit,
+  MarketsHub,
+  Rules,
+  TradeCircuit,
+} from "../components/docs-diagrams";
+import { ROBINHOOD_CHAIN_ID, ROBINHOOD_EXPLORER } from "./chains";
+import { RH_ETH_FILLER, RH_FEE_VAULT, RH_LIQUIDITY_GATE } from "./addresses";
+import { NETWORKS, RH_WETH } from "./networks";
 
-export const REFERENCE_TOKEN = "0xe44756A4913caa27dE723dA633422D21B632460f";
+const RH_V2_FACTORY = "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f";
+const RH_V3_FACTORY = "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA";
+const RH_V4_STATE_VIEW = "0xF3334192D15450CdD385c8B70e03f9A6bD9E673b";
+const RH_V3_NPM = "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3";
+const RH_V3_QUOTER = "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7";
+const RH_SWAP_ROUTER = "0xCaf681a66D020601342297493863E78C959E5cb2";
 
 export function docsBody(slug: string): ReactNode {
   switch (slug) {
     case "overview":
       return <Overview />;
-    case "launch-mechanism":
-      return <LaunchMechanism />;
-    case "trading-and-pricing":
-      return <TradingAndPricing />;
-    case "graduation":
-      return <Graduation />;
-    case "fees-and-burns":
-      return <FeesAndBurns />;
-    case "protocol-revenue":
-      return <ProtocolRevenue />;
-    case "community-takeovers":
-      return <CommunityTakeovers />;
-    case "risk-disclosures":
-      return <RiskDisclosures />;
+    case "liquidity":
+      return <Liquidity />;
+    case "trades":
+      return <Trades />;
+    case "markets":
+      return <Markets />;
+    case "fees":
+      return <Fees />;
+    case "risks":
+      return <Risks />;
     case "network":
       return <Network />;
     case "contracts":
       return <Contracts />;
-    case "onchain-events":
-      return <OnchainEvents />;
-    case "reading-token-state":
-      return <ReadingTokenState />;
-    case "pricing-and-graduation":
-      return <PricingAndGraduation />;
-    case "reference-token":
-      return <ReferenceToken />;
+    case "events":
+      return <Events />;
     case "support":
       return <Support />;
-    case "terms-and-attribution":
+    case "terms":
       return <Terms />;
     default:
       return null;
@@ -63,301 +51,194 @@ export function docsBody(slug: string): ReactNode {
 function Overview() {
   return (
     <>
-      <p>
-        Zorp is a non-custodial token launchpad on Arc. A launch does not use a
-        bonding curve. The factory mints 1 billion tokens into a locked Uniswap
-        v4 concentrated position, paired with USDC, at a hardcoded{" "}
-        ${TARGET_FDV_USD.toLocaleString()} opening FDV. The token is tradable
-        from the first block.
-      </p>
-      <p>
-        Fees on trades are always taken in the pair asset (USDC), never in the
-        launch token. Graduation at ${GRADUATION_MC_USD.toLocaleString()} market
-        cap is a frontend milestone only — the pool does not migrate or unlock.
-      </p>
-      <h2>What Zorp is not</h2>
-      <ul>
-        <li>Not a custodial issuer. Zorp never holds user funds.</li>
-        <li>Not a bonding-curve pad. There is no virtual curve to graduate out of.</li>
-        <li>Not a compliance registry. Pairing assets are an admin allowlist.</li>
-      </ul>
+      <Lead>
+        Launch any coin against a live Robinhood token. No curve. No migrate.
+        The factory opens a locked Uniswap v4 book at $3,000 FDV. An optional
+        first buy fills in that same transaction.
+      </Lead>
+      <Architecture />
+      <Rules
+        title="Launch rules"
+        items={[
+          { label: "Supply", value: "1,000,000,000" },
+          { label: "Open", value: "$3,000 FDV" },
+          { label: "Seed", value: "Token only · no pair deposit" },
+          { label: "First buy", value: "Optional · same launch tx" },
+          { label: "Venue", value: "Official Uniswap v4" },
+        ]}
+      />
     </>
   );
 }
 
-function LaunchMechanism() {
+function Liquidity() {
   return (
     <>
-      <p>
-        Anyone calls <Code>LaunchFactory.launchToken</Code> with name, ticker,
-        metadata, an optional first buy, and a fee config. The creator must be
-        the connected wallet. Pairing is USDC on the live factory.
-      </p>
-      <h2>On launch</h2>
-      <ul>
-        <li>1B tokens are minted and seeded into a Uniswap v4 position.</li>
-        <li>Fee tier is 0, tick spacing is 60, hook is the Zorp launch hook.</li>
-        <li>The LP NFT is locked in <Code>LaunchLocker</Code>.</li>
-        <li>
-          Opening price is implied by ${TARGET_FDV_USD.toLocaleString()} FDV
-          over {TOTAL_SUPPLY.toLocaleString()} supply — about $0.000003 per token
-          against 6-decimal USDC.
-        </li>
-        <li>
-          An optional first buy pulls USDC from the creator, swaps through the
-          new pool, and takes the 0.5% protocol cut on the amount spent.
-        </li>
-      </ul>
-      <p>
-        Factory, hook, locker, distributor, pool manager, and buyback are
-        excluded from token tax so seeding and fee routing do not recurse.
-      </p>
+      <Lead>
+        A pair is allowed when its official Uniswap book versus ETH, WETH, or
+        USDG is real — v2, v3, or v4. After launch the new TOKEN / PAIR pool
+        lives on its own.
+      </Lead>
+      <LiquidityCircuit />
+      <Rules
+        items={[
+          { label: "ETH / WETH / USDG", value: "Always pairable" },
+          { label: "Any other token", value: "Uni v2 / v3 / v4 vs ETH · WETH · USDG ≥ $5,000" },
+          { label: "Price", value: "Must quote a USD mark" },
+          { label: "After launch", value: "Gate is not re-checked" },
+        ]}
+      />
     </>
   );
 }
 
-function TradingAndPricing() {
+function Trades() {
   return (
     <>
-      <p>
-        After launch, the pool is a normal Uniswap v4 pool. The site quotes
-        through the v4 Quoter and swaps through the Universal Router with
-        Permit2. Price is the pool <Code>sqrtPriceX96</Code> from StateView,
-        converted to USDC per whole token.
-      </p>
-      <h2>Anti-snipe window</h2>
-      <p>
-        Buys in the first seconds pay an extra decaying tax on top of the
-        creator buy tax: 99% at t=0, effectively gone by about 3 seconds. The
-        factory first buy is treated as internal and skips hook tax.
-      </p>
-      <h2>What you pay</h2>
-      <p>
-        Every non-internal swap pays the launch tax (creator-set, up to 10% buy
-        / 10% sell) plus a separate 0.5% protocol fee. Both are taken in USDC.
-        The hook pulls that USDC from the pool and sends it to{" "}
-        <Code>FeeDistributor.accrue</Code>.
-      </p>
-      <h2>Official pool only</h2>
-      <p>
-        Anyone can open another Uniswap v4 token/USDC pool. Bots and wallets
-        that pick the thin clone will show huge price impact. The Zorp book
-        is fee <Code>0</Code>, tick spacing <Code>60</Code>, hook{" "}
-        <Code>{LAUNCH_HOOK}</Code>. Dexscreener pair id is that pool id.
-        Ignore any other v4 token/USDC pair (for $ZORP the clone is the 70%
-        fee pool).
-      </p>
-      <h2>Uniswap.org and aggregators</h2>
-      <p>
-        The Labs app indexes the launch pool but will not route through it
-        until Uniswap allowlists the hook. Zorp uses{" "}
-        <Code>beforeSwapReturnDelta</Code> / <Code>afterSwapReturnDelta</Code>{" "}
-        to take tax in USDC, so it is not auto-allowlisted. Submit{" "}
-        <a
-          href="https://developers.uniswap.org/hook-allowlist"
-          target="_blank"
-          rel="noreferrer"
-        >
-          developers.uniswap.org/hook-allowlist
-        </a>
-        .
-      </p>
-      <ul>
-        <li>Hook: <Code>{LAUNCH_HOOK}</Code></li>
-        <li>
-          Example pool id ($ZORP):{" "}
-          <Code>0xbc14ccadfb71da5e4006eaff7e9d2491dbcdb997c81c2e5d97da9744beb4db31</Code>
-        </li>
-        <li>Chain: Arc (5042)</li>
-        <li>Tick “hook uses a delta flag”</li>
-        <li>
-          Source:{" "}
-          <a
-            href="https://github.com/ZorpDotFun/zorp-contracts"
-            target="_blank"
-            rel="noreferrer"
-          >
-            github.com/ZorpDotFun/zorp-contracts
-          </a>
-        </li>
-      </ul>
-      <p>
-        Until that lands, swap on zorpdotfun.com. A vanilla second pool would
-        bypass Zorp fees and split liquidity — do not seed one to “fix”
-        Uniswap.
-      </p>
+      <Lead>
+        Buys and sells hit the same v4 pool. Pair-side inventory arrives from
+        buyers. An optional creator first buy fills in the launch transaction.
+      </Lead>
+      <TradeCircuit />
     </>
   );
 }
 
-function Graduation() {
+function Markets() {
   return (
     <>
-      <p>
-        Graduation is a display flag at ${GRADUATION_MC_USD.toLocaleString()}{" "}
-        market cap. The pool, hook, locker, and fee config do not change when
-        that line is crossed. Tokens stay on the same Uniswap v4 pool they
-        launched in.
-      </p>
-      <p>
-        Approximate USDC that must flow into a one-sided concentrated pool to
-        move FDV from ${TARGET_FDV_USD.toLocaleString()} to $
-        {GRADUATION_MC_USD.toLocaleString()} is{" "}
-        ${TARGET_FDV_USD.toLocaleString()} × (√(
-        {GRADUATION_MC_USD / TARGET_FDV_USD}) − 1) ≈ $7,955 before taxes. The
-        site meter uses live spot × 1B supply.
-      </p>
+      <Lead>
+        Zorp does not keep a private book. Every route that can see Uniswap v4
+        can see the launch.
+      </Lead>
+      <MarketsHub />
+      <Rules
+        items={[
+          { label: "Zorp", value: "Quotes and swaps the launch pool" },
+          { label: "Uniswap / wallets", value: "Standard v4 · auto-allowlist hook" },
+          { label: "Dexscreener", value: "Index the v4 pool, not a clone" },
+          { label: "Aggregators", value: "Same pool id · same depth" },
+        ]}
+      />
     </>
   );
 }
 
-function FeesAndBurns() {
+function Fees() {
   return (
     <>
-      <p>
-        Launch tax is split 100% across creator, holders (USDC dividends),
-        buyback-and-burn, auto-LP, tribute, and an optional protocol share of
-        that tax. Presets: Creator backed, Diamond hands, Deflationary, Auto LP,
-        Tribute, or Custom.
-      </p>
-      <ul>
-        <li>Creator and tribute amounts sit in <Code>claimable</Code> until claimed.</li>
-        <li>Dividends are notified onto the launch token for holders to claim.</li>
-        <li>
-          Buyback quote is spent through the same pool; tokens received are
-          burned when someone calls <Code>distribute</Code>.
-        </li>
-        <li>Auto LP adds more USDC + token into the locked position.</li>
-      </ul>
-      <p>
-        The 0.5% protocol swap fee is not part of that 100% split. It is always
-        taken in USDC and pushed to the protocol treasury.
-      </p>
+      <Lead>
+        No token tax. Protocol is a fixed 1% and pays the treasury when fees
+        are collected. Creator picks 0–10% and claims on Zorp. Holder mode
+        pushes the pair cut to whoever is holding once the pot hits $50.
+      </Lead>
+      <FeeSplit />
+      <Rules
+        items={[
+          { label: "Protocol", value: "1% · paid to treasury on collect" },
+          { label: "Creator", value: "0–10% · Claim on Zorp collects and pays" },
+          { label: "Holders", value: "Same 0–10% · pushed to current holders at $50" },
+          { label: "Uniswap", value: "Official book · no extra Zorp tax" },
+        ]}
+      />
     </>
   );
 }
 
-function ProtocolRevenue() {
+function Risks() {
   return (
     <>
-      <p>
-        Protocol revenue is the 0.5% USDC fee on every external trade and on
-        the factory first buy. <Code>FeeDistributor</Code> transfers that
-        amount to <Code>protocolTreasury</Code>, which is{" "}
-        <Code>ZorpBuyback</Code> on the live deploy.
-      </p>
-      <p>
-        USDC sits in the buyback contract until an admin sets official $ZORP
-        and calls <Code>buybackAndBurn</Code>, or withdraws. $ZORP is not set
-        yet. Check the buyback USDC balance on Arc for the current earned
-        amount.
-      </p>
-      <Addr label="Treasury / buyback" value={ZORP_BUYBACK} />
-    </>
-  );
-}
-
-function CommunityTakeovers() {
-  return (
-    <>
-      <p>
-        Zorp has no community-takeover auction and no bonding-curve handoff.
-        The token is a Uniswap v4 pool from block one. Liquidity is locked;
-        graduation does not move it.
-      </p>
-      <p>
-        Creators cannot pull the LP. They can claim their tax share and they
-        chose the fee split at launch. Metadata is written once at launch
-        through the factory. If a creator walks away, the pool keeps trading.
-      </p>
-    </>
-  );
-}
-
-function RiskDisclosures() {
-  return (
-    <>
-      <p>
-        Launches are experimental tokens on a new chain. Prices can go to
-        zero. The opening FDV is an implied starting mark, not a valuation.
-        Taxes, the snipe window, and the protocol fee change what a trader
-        receives versus the quoter mid.
-      </p>
-      <ul>
-        <li>Smart contracts can have bugs. Review source before sizing a trade.</li>
-        <li>Wallet RPCs on Arc are uneven; a failed quote is not a failed pool.</li>
-        <li>Graduation is cosmetic. It does not add liquidity or change risk.</li>
-        <li>Zorp does not list, endorse, or custody any launch token.</li>
-      </ul>
+      <Lead>Experimental tokens. Price can go to zero. Review the pool before sizing.</Lead>
+      <Rules
+        items={[
+          { label: "Open mark", value: "A starting print, not a valuation" },
+          { label: "One-sided book", value: "Early sells have thin pair-side" },
+          { label: "Pair book", value: "Can dry up after launch" },
+          { label: "Custody", value: "Zorp never holds user funds" },
+        ]}
+      />
     </>
   );
 }
 
 function Network() {
+  const factory = NETWORKS.robinhood.protocol.factory;
+  const live = NETWORKS.robinhood.protocol.deployed;
   return (
     <>
-      <p>
-        Live Zorp is on Arc public mainnet, chain id {ARC_CHAIN_ID}. Native gas
-        is USDC at 18 decimals. The pair asset is the USDC predeploy at 6
-        decimals. Those are different contracts in practice — do not mix units.
-      </p>
-      <ul>
-        <li>Chain id: {ARC_CHAIN_ID}</li>
-        <li>
-          Primary RPC: <Code>{ARC_RPC_PRIMARY}</Code>
-        </li>
-        <li>
-          Explorer:{" "}
-          <a href={ARC_EXPLORER} target="_blank" rel="noreferrer">
-            {ARC_EXPLORER}
-          </a>
-        </li>
-        <li>
-          Pair USDC (6dp): <Code>{USDC}</Code>
-        </li>
-      </ul>
+      <Lead>Robinhood Chain. ETH gas. Official Uniswap v4.</Lead>
+      <Rules
+        items={[
+          { label: "Chain", value: String(ROBINHOOD_CHAIN_ID) },
+          { label: "RPC", value: "Zorp · Robinhood" },
+          { label: "Explorer", value: ROBINHOOD_EXPLORER },
+          {
+            label: "Factory",
+            value: live ? factory : "Pending deploy",
+          },
+        ]}
+      />
     </>
   );
 }
 
 function Contracts() {
+  const factory = NETWORKS.robinhood.protocol.factory;
+  const locker = NETWORKS.robinhood.protocol.locker;
+  const hook = NETWORKS.robinhood.protocol.hook;
+  const live = NETWORKS.robinhood.protocol.deployed;
+  const rows: [string, string, boolean][] = [
+    ["RhLaunchFactory", live ? factory : "—", live],
+    [
+      "RhLocker",
+      live && locker !== "0x0000000000000000000000000000000000000000"
+        ? locker
+        : "—",
+      live && locker !== "0x0000000000000000000000000000000000000000",
+    ],
+    ["RhHook", live ? hook : "—", live],
+    ["RhFeeVault", live ? RH_FEE_VAULT : "—", live],
+    ["LiquidityGate", live ? RH_LIQUIDITY_GATE : "—", live],
+    ["RhEthFiller", live ? RH_ETH_FILLER : "—", live],
+    ["ETH", "Native (address zero)", true],
+    ["WETH", RH_WETH, true],
+    ["v4 PoolManager", "0x8366a39CC670B4001A1121B8F6A443A643e40951", true],
+    ["v4 PositionManager", "0x58daec3116aae6D93017bAAea7749052E8a04fA7", true],
+    ["v2 Factory (pair gate)", RH_V2_FACTORY, true],
+    ["v3 Factory (pair gate)", RH_V3_FACTORY, true],
+    ["v4 StateView (pair gate)", RH_V4_STATE_VIEW, true],
+    ["Universal Router", "0x8876789976dEcBfCbBbe364623C63652db8C0904", true],
+  ];
   return (
     <>
-      <p>Live Zorp deploy on Arc {ARC_CHAIN_ID}. Factory owner is the 2-of-3 council; hook and buyback owners are the timelock. Telegram and Dexscreener should watch <Code>{LAUNCH_FACTORY}</Code> and read <Code>image()</Code> / <Code>imageUri()</Code> on each launched token.</p>
-      <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-line">
+      <Lead>
+        Official Uniswap addresses plus the live Zorp factory on 4663.
+      </Lead>
+      <div className="mt-5 overflow-x-auto rounded-3xl bg-raised ring-1 ring-line">
         <table className="w-full min-w-[520px] text-left text-[13px]">
           <thead>
             <tr className="border-b border-line text-muted">
-              <th className="px-4 py-2.5 font-medium">Role</th>
-              <th className="px-4 py-2.5 font-medium">Address</th>
+              <th className="px-4 py-3 font-medium">Role</th>
+              <th className="px-4 py-3 font-medium">Address</th>
             </tr>
           </thead>
           <tbody>
-            {[
-              ["LaunchFactory", LAUNCH_FACTORY],
-              ["LaunchHook", LAUNCH_HOOK],
-              ["FeeDistributor", FEE_DISTRIBUTOR],
-              ["LaunchLocker", LAUNCH_LOCKER],
-              ["ZorpBuyback", ZORP_BUYBACK],
-              ["Council", COUNCIL],
-              ["Timelock", TIMELOCK],
-              ["USDC (6dp)", USDC],
-              ["v4 PoolManager", V4_POOL_MANAGER],
-              ["v4 StateView", V4_STATE_VIEW],
-              ["v4 Quoter", V4_QUOTER],
-              ["v4 Universal Router", V4_UNIVERSAL_ROUTER],
-            ].map(([role, address]) => (
+            {rows.map(([role, address, linked]) => (
               <tr key={role} className="border-b border-line/70 last:border-0">
-                <td className="px-4 py-2.5 text-ink">{role}</td>
-                <td className="px-4 py-2.5">
-                  <a
-                    href={explorerAddress(address)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="break-all text-muted hover:text-ink"
-                  >
-                    {address}
-                  </a>
+                <td className="px-4 py-3 text-ink">{role}</td>
+                <td className="px-4 py-3">
+                  {linked && address.startsWith("0x") ? (
+                    <a
+                      href={`${ROBINHOOD_EXPLORER}/address/${address}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="break-all text-muted hover:text-ink"
+                    >
+                      {address}
+                    </a>
+                  ) : (
+                    <span className="text-muted">{address}</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -368,144 +249,18 @@ function Contracts() {
   );
 }
 
-function OnchainEvents() {
+function Events() {
   return (
     <>
-      <p>Index these to list launches, trades, and fee movement.</p>
-      <h2>Factory</h2>
-      <ul>
-        <li>
-          <Code>TokenLaunched(token, creator, pairAsset, supply, openingPrice, firstBuySpent, firstBuyTokens)</Code>
-        </li>
-        <li>
-          <Code>TokenMetadataSet(token, name, symbol, image, description, twitter, telegram, website)</Code>{" "}
-          — <Code>image</Code> is an <Code>ipfs://</Code> CID (or a legacy https
-          gateway URL on early tokens).
-        </li>
-      </ul>
-      <h2>Distributor</h2>
-      <ul>
-        <li>
-          <Code>Accrued(token, splitQuote, protocolQuote)</Code> — tax split vs protocol USDC.
-        </li>
-        <li>
-          <Code>Claimed(account, asset, amount)</Code>
-        </li>
-        <li>
-          <Code>Distributed(token, boughtBack, autoLpQuote)</Code>
-        </li>
-      </ul>
-      <h2>Pool</h2>
-      <p>
-        Uniswap v4 <Code>Swap</Code> on PoolManager, filtered by the launch
-        pool id. Sender is usually the Universal Router; the trader is{" "}
-        <Code>tx.from</Code>.
-      </p>
-    </>
-  );
-}
-
-function ReadingTokenState() {
-  return (
-    <>
-      <p>
-        Treat an address as a Zorp launch only if{" "}
-        <Code>factory.launches(token).exists</Code> is true.
-      </p>
-      <ul>
-        <li>
-          <Code>factory.launches(token)</Code> — creator, pair, opening price,
-          launch time, tick range, token-is-currency0.
-        </li>
-        <li>
-          <Code>token.getTokenInfo()</Code> — name, symbol, image, socials,
-          description.
-        </li>
-        <li>
-          <Code>token.image()</Code> and <Code>token.imageUri()</Code> — same
-          string. Prefer <Code>ipfs://&lt;cid&gt;</Code>. Resolve through any
-          public IPFS gateway for Telegram / Dexscreener cards.
-        </li>
-        <li>
-          <Code>factory.allTokens(i)</Code> / <Code>launchCount()</Code> — the
-          full list.
-        </li>
-        <li>
-          <Code>FeeDistributor.claimable(account, USDC)</Code> — unclaimed
-          creator / tribute USDC.
-        </li>
-        <li>
-          <Code>StateView.getSlot0(poolId)</Code> — live sqrt price.{" "}
-          <Code>poolId</Code> is keccak of the launch PoolKey (fee 0, spacing
-          60, hook {LAUNCH_HOOK.slice(0, 8)}…).
-        </li>
-      </ul>
-      <h2>Telegram and Dexscreener</h2>
-      <p>
-        Watch factory <Code>{LAUNCH_FACTORY}</Code> for{" "}
-        <Code>TokenLaunched</Code> and <Code>TokenMetadataSet</Code>. Read the
-        image from <Code>imageUri()</Code> (Argus-style) or <Code>image()</Code>
-        — they return the same URI. Do not expect a separate metadata JSON;
-        the pointer lives on the ERC-20. Every launch is submitted to Sourcify,
-        Arcscan, and A/X Explorer with the same 0.8.26 / viaIR standard JSON.
-      </p>
-    </>
-  );
-}
-
-function PricingAndGraduation() {
-  return (
-    <>
-      <p>
-        Market cap on the site is live USDC per token × {TOTAL_SUPPLY.toLocaleString()}.
-        Do not use Dexscreener as the source of truth for the opening print —
-        compute from <Code>sqrtPriceX96</Code>.
-      </p>
-      <ul>
-        <li>
-          Opening FDV is ${TARGET_FDV_USD.toLocaleString()}. Graduation mark is $
-          {GRADUATION_MC_USD.toLocaleString()}.
-        </li>
-        <li>
-          Token is currency1 vs USDC when <Code>token &gt; USDC</Code>. Invert
-          the v4 price in that case.
-        </li>
-        <li>
-          Integer USDC-raw (6dp) per token truncates micro moves. Scale the
-          bigint math if you need a chart that actually wiggles.
-        </li>
-        <li>
-          Graduation is <Code>mcap &gt;= {GRADUATION_MC_USD}</Code> in the
-          frontend. No contract call.
-        </li>
-      </ul>
-    </>
-  );
-}
-
-function ReferenceToken() {
-  return (
-    <>
-      <p>
-        TEST1 is the first live launch on the factory. Use it to wire quotes,
-        swaps, holders, and fee claims.
-      </p>
-      <Addr label="TEST1" value={REFERENCE_TOKEN} />
-      <Addr label="Creator" value="0x91ac26b715185D91aE361fef5ACB24743210EfF7" />
-      <ul>
-        <li>Ticker TEST1, 18 decimals, USDC pair.</li>
-        <li>Token is currency1. Opening raw price is 3 (6dp USDC per token).</li>
-        <li>
-          Dexscreener:{" "}
-          <a
-            href={`https://dexscreener.com/arc/${REFERENCE_TOKEN}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            dexscreener.com/arc/TEST1
-          </a>
-        </li>
-      </ul>
+      <Lead>Index the factory. Route volume from the v4 pool.</Lead>
+      <Rules
+        items={[
+          { label: "Factory", value: "TokenLaunched · firstBuySpent · firstBuyTokens" },
+          { label: "Locker", value: "Locked(token, poolId)" },
+          { label: "Token", value: "metadata · PoolBound" },
+          { label: "Pool", value: "Uniswap v4 Swap on the launch pair" },
+        ]}
+      />
     </>
   );
 }
@@ -513,33 +268,47 @@ function ReferenceToken() {
 function Support() {
   return (
     <>
-      <p>
-        Product and status updates go through{" "}
-        <a href="https://x.com/zorpdotfun" target="_blank" rel="noreferrer">
-          @zorpdotfun
-        </a>
-        . There is no support inbox that can reverse a swap or a launch.
-      </p>
-      <ul>
-        <li>
-          App:{" "}
-          <a href="https://zorpdotfun.com" target="_blank" rel="noreferrer">
-            zorpdotfun.com
-          </a>
-        </li>
-        <li>
-          Explorer:{" "}
-          <a href={ARC_EXPLORER} target="_blank" rel="noreferrer">
-            {ARC_EXPLORER}
-          </a>
-        </li>
-        <li>
-          Factory:{" "}
-          <a href={explorerAddress(LAUNCH_FACTORY)} target="_blank" rel="noreferrer">
-            {LAUNCH_FACTORY}
-          </a>
-        </li>
-      </ul>
+      <Lead>Status on X. No desk can reverse a swap.</Lead>
+      <Rules
+        items={[
+          {
+            label: "App",
+            value: (
+              <a href="https://zorpdotfun.com" target="_blank" rel="noreferrer">
+                zorpdotfun.com
+              </a>
+            ),
+          },
+          {
+            label: "X",
+            value: (
+              <a href="https://x.com/zorpdotfun" target="_blank" rel="noreferrer">
+                @zorpdotfun
+              </a>
+            ),
+          },
+          {
+            label: "Explorer",
+            value: (
+              <a href={ROBINHOOD_EXPLORER} target="_blank" rel="noreferrer">
+                robinhoodchain.blockscout.com
+              </a>
+            ),
+          },
+          {
+            label: "Source",
+            value: (
+              <a
+                href="https://github.com/ZorpDotFun"
+                target="_blank"
+                rel="noreferrer"
+              >
+                github.com/ZorpDotFun
+              </a>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }
@@ -547,41 +316,10 @@ function Support() {
 function Terms() {
   return (
     <>
-      <p>
-        These docs describe the live Zorp contracts and site as shipped. They
-        are not an offer, not investment advice, and not a guarantee of uptime
-        or token value. Use at your own risk.
-      </p>
-      <p>
-        Uniswap v4 addresses on Arc come from the official Uniswap deployments
-        feed. USDC on Arc is Circle’s predeploy. Zorp branding (Yellowell,
-        wordmark, 3D marks) is Zorp. Do not treat third-party charts or bots as
-        protocol documents.
-      </p>
+      <Lead>
+        Not an offer. Not advice. Uniswap addresses come from the official
+        deployments feed. Yellowell and the marks are Zorp.
+      </Lead>
     </>
-  );
-}
-
-function Code({ children }: { children: ReactNode }) {
-  return (
-    <code className="rounded-md bg-surface px-1.5 py-0.5 text-[13px] ring-1 ring-line">
-      {children}
-    </code>
-  );
-}
-
-function Addr({ label, value }: { label: string; value: string }) {
-  return (
-    <p className="mt-3">
-      <span className="text-muted">{label}: </span>
-      <a
-        href={explorerAddress(value)}
-        target="_blank"
-        rel="noreferrer"
-        className="break-all text-ink underline decoration-yellowell/50 underline-offset-2 hover:text-yellowell"
-      >
-        {value}
-      </a>
-    </p>
   );
 }

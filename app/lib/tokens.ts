@@ -18,7 +18,10 @@ export type Token = {
   price: number;
   change24h: number;
   launchedAt: number;
-  pair: "USDC" | "WETH";
+  pair: string;
+  pairAsset?: string;
+  poolFee?: number;
+  poolId?: string;
   hue: number;
   recentBuys: number;
   tokenIsCurrency0: boolean;
@@ -31,6 +34,17 @@ export function formatUsd(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+export function formatCompactUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "$0";
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) {
+    const k = value / 1_000;
+    return `$${k >= 100 ? k.toFixed(0) : k.toFixed(1)}K`;
+  }
+  return `$${value.toFixed(value >= 100 ? 0 : 2)}`;
 }
 
 export function formatUsdPrice(value: number): string {
@@ -121,6 +135,28 @@ const athMem = loadAth();
 
 export function readAth(address: string) {
   return athMem[address.toLowerCase()] ?? 0;
+}
+
+const exactMcap = new Map<string, number>();
+
+export function readExactMcap(address: string) {
+  return exactMcap.get(address.toLowerCase()) ?? 0;
+}
+
+/** First live print wins. Later prints only raise it. */
+export function noteExactMcap(address: string, fdv: number) {
+  const key = address.toLowerCase();
+  if (!(fdv > 0) || !address) return readExactMcap(address);
+  const prev = exactMcap.get(key);
+  if (prev == null) {
+    exactMcap.set(key, fdv);
+    return fdv;
+  }
+  if (fdv > prev) {
+    exactMcap.set(key, fdv);
+    return fdv;
+  }
+  return prev;
 }
 
 export function noteAth(address: string, value: number) {

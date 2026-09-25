@@ -3,7 +3,14 @@ import { fetchApiJson } from "./api";
 import { FEE_DISTRIBUTOR, LAUNCH_FACTORY, USDC, V4_POOL_MANAGER, ZORP_BUYBACK } from "./addresses";
 import { feeDistributorAbi, getPublicClient, launchFactoryAbi, readProtocolFeeBps } from "./factory";
 import { PROTOCOL_SWAP_FEE_BPS } from "./fee-models";
+import { getNetwork } from "./networks";
 import { arcLaunchPoolId } from "./pool-price";
+import {
+  readRhCachedProtocolStats,
+  RH_FACTORY_LIVE,
+  startRhProtocolStats,
+} from "./rh-protocol-stats";
+import { readAllRhFeeEstimates } from "./uncollected-fees";
 
 const USDC_DECIMALS = 6;
 const DAY = 86_400;
@@ -116,6 +123,7 @@ let liveStarted = false;
 let claimsReady = false;
 
 export function readCachedProtocolStats(): ProtocolStats | null {
+  if (getNetwork().id === "robinhood") return readRhCachedProtocolStats();
   if (memoryCache) return memoryCache;
   if (typeof sessionStorage === "undefined") return null;
   try {
@@ -258,6 +266,19 @@ export function subscribeProtocolStats(
   onUpdate: (stats: ProtocolStats) => void,
 ) {
   liveListeners.add(onUpdate);
+  if (getNetwork().id === "robinhood") {
+    const cached = readRhCachedProtocolStats();
+    if (cached) onUpdate(cached);
+    if (!liveStarted) {
+      liveStarted = true;
+      startRhProtocolStats((stats) => notifyLive(stats));
+    } else if (cached) {
+      notifyLive(cached);
+    }
+    return () => {
+      liveListeners.delete(onUpdate);
+    };
+  }
   seedClaimsFromCache();
   seedSwapPrints();
   seedFeePrints();
@@ -502,6 +523,61 @@ function withCreatorFees(stats: ProtocolStats): ProtocolStats {
     creatorFeesAll,
     creatorFeesHeld: stats.creatorFeesHeld ?? Math.max(0, creatorFeesAll - claimedAll),
   };
+}
+
+async function hydrateRhPoolFees() {
+  try {
+    const rows = await readAllRhFeeEstimates();
+    const protocolUsd = rows.reduce((sum, row) => sum + row.protocolUsd, 0);
+    const creatorUsd = rows.reduce((sum, row) => sum + row.creatorUsd, 0);
+    const creatorHeld = creatorUsd;
+    const cached = memoryCache;
+    const now = Date.now();
+    const next: ProtocolStats = {
+      ...(cached ?? {
+        updatedAt: now,
+        volume24h: 0,
+        volumePrev24h: 0,
+        volumeAll: 0,
+        launches24h: 0,
+        launchesPrev24h: 0,
+        launchesAll: rows.length,
+        uniqueDevs: 0,
+        fees24h: 0,
+        feesPrev24h: 0,
+        feesAll: 0,
+        feesHeld: 0,
+        claimed24h: 0,
+        claimedPrev24h: 0,
+        claimedAll: 0,
+        creatorFees24h: 0,
+        creatorFeesPrev24h: 0,
+        creatorFeesAll: 0,
+        creatorFeesHeld: 0,
+        volumeDays: [],
+        volume30m: [],
+        volume1h: [],
+        launchDays: [],
+        launch30m: [],
+        launch1h: [],
+        factoryLiveAt: FACTORY_LIVE_FALLBACK,
+        volumeReady: false,
+        partial: false,
+      }),
+      updatedAt: now,
+      feesAll: Math.max(cached?.feesAll ?? 0, protocolUsd),
+      feesHeld: protocolUsd,
+      creatorFeesAll: Math.max(cached?.creatorFeesAll ?? 0, creatorUsd),
+      creatorFeesHeld: creatorHeld,
+      launchesAll: Math.max(cached?.launchesAll ?? 0, rows.length),
+      partial: false,
+    };
+    cacheStats(next);
+    notifyLive(next);
+    return next;
+  } catch {
+    return null;
+  }
 }
 
 async function hydrateCreatorFeesFromChain() {
@@ -1364,7 +1440,9 @@ function formatIntervalLabel(time: number) {
 }
 
 export function emptyVolumeBars(interval: VolumeInterval): DayBucket[] {
-  return fillInterval([], FACTORY_LIVE_FALLBACK, Math.floor(Date.now() / 1000), interval);
+  const from =
+    getNetwork().id === "robinhood" ? RH_FACTORY_LIVE : FACTORY_LIVE_FALLBACK;
+  return fillInterval([], from, Math.floor(Date.now() / 1000), interval);
 }
 
 export function changePct(current: number, previous: number) {

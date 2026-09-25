@@ -1,13 +1,11 @@
 import { erc20Abi, formatUnits, isAddress, parseAbiItem, type Address } from "viem";
 import { TOTAL_SUPPLY } from "./addresses";
-import { getPublicClient } from "./factory";
-import { protocolOf } from "./networks";
-import { launchPoolId, usdPerTokenFromSqrt } from "./pool-price";
+import { getPublicClient, resolveRhLaunchFactory } from "./factory";
+import { getNetwork, protocolOf } from "./networks";
+import { launchPoolIdForToken, pairMark, usdPerTokenFromSqrt } from "./pool-price";
+import { collectContractLogs, marketWindow } from "./rpc-logs";
 
 const TOKEN_DECIMALS = 18;
-function pairDecimals() {
-  return protocolOf().pairDecimals;
-}
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 const swapEvent = parseAbiItem(
@@ -18,6 +16,13 @@ const transferEvent = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 );
 
+const launchedEvent = parseAbiItem(
+  "event TokenLaunched(address indexed token, address indexed creator, address indexed pairAsset, uint256 supply, uint256 openingPrice, uint256 firstBuySpent, uint256 firstBuyTokens)",
+);
+const rhLaunchedEvent = parseAbiItem(
+  "event TokenLaunched(address indexed token, address indexed creator, address indexed pairAsset, bytes32 poolId, uint24 fee, uint16 creatorFeeBps, uint8 feeTo, uint256 firstBuySpent, uint256 firstBuyTokens)",
+);
+
 export type MarketTrade = {
   hash: HexString;
   trader: string;
@@ -26,6 +31,7 @@ export type MarketTrade = {
   usdcAmount: number;
   price: number;
   time: number;
+  venue?: string;
 };
 
 export type MarketHolder = {
@@ -50,49 +56,236 @@ export function requestMarketRefresh(detail?: {
 export async function fetchRecentTrades(
   token: Address,
   tokenIsCurrency0: boolean,
-  lookback = 80_000n,
+  lookback?: bigint,
+  meta?: { poolId?: string; pairAsset?: string },
 ): Promise<MarketTrade[]> {
+  const [resolved, creatorBuy, mark] = await Promise.all([
+    resolveLaunch(token, meta),
+    fetchCreatorBuy(token),
+    pairMark(meta?.pairAsset),
+  ]);
+  const window =
+    lookback != null
+      ? await lookbackWindow(lookback)
+      : await marketWindow(resolved.launchedAt);
+
+  let rows: MarketTrade[] = [];
   try {
-    const logs = await collectLogs({
+    const logs = (await collectContractLogs({
       address: protocolOf().v4PoolManager,
       event: swapEvent,
-      args: { id: launchPoolId(token) },
-      lookback,
+      args: { id: resolved.poolId },
+      fromBlock: window.fromBlock,
       newestFirst: true,
       limit: 50,
-    });
-    if (logs.length === 0) return [];
+    })) as {
+      args: {
+        amount0?: bigint;
+        amount1?: bigint;
+        sender?: Address;
+        sqrtPriceX96?: bigint;
+      };
+      blockNumber: bigint;
+      transactionHash: HexString;
+    }[];
 
     const stamps = await blockTimes(logs.map((log) => log.blockNumber));
     const hashes = [...new Set(logs.map((log) => log.transactionHash))];
     const senders = new Map<HexString, string>();
     await Promise.all(
       hashes.map(async (hash) => {
-        const tx = await getPublicClient().getTransaction({ hash });
-        senders.set(hash, tx.from);
+        try {
+          const tx = await getPublicClient().getTransaction({ hash });
+          senders.set(hash, tx.from);
+        } catch {
+          /* sender falls back to the pool sender */
+        }
       }),
     );
 
-    return logs
+    rows = logs
       .map((log) => {
         const amount0 = log.args.amount0 ?? 0n;
         const amount1 = log.args.amount1 ?? 0n;
         const tokenDelta = tokenIsCurrency0 ? amount0 : amount1;
-        const usdcDelta = tokenIsCurrency0 ? amount1 : amount0;
+        const pairDelta = tokenIsCurrency0 ? amount1 : amount0;
+        const locker = protocolOf().locker.toLowerCase();
+        const sender = (log.args.sender ?? "").toLowerCase();
+        const fromWallet = senders.get(log.transactionHash) ?? log.args.sender ?? "";
         return {
           hash: log.transactionHash,
-          trader: senders.get(log.transactionHash) ?? log.args.sender ?? "",
-          buy: tokenDelta > 0n,
+          trader: fromWallet,
+          buy: tokenDelta > 0n || sender === locker,
           tokenAmount: Number(formatUnits(abs(tokenDelta), TOKEN_DECIMALS)),
-          usdcAmount: Number(formatUnits(abs(usdcDelta), pairDecimals())),
+          usdcAmount: Number(formatUnits(abs(pairDelta), mark.decimals)) * mark.usd,
           price: usdPerTokenFromSqrt(log.args.sqrtPriceX96 ?? 0n, tokenIsCurrency0),
-          time: (stamps.get(log.blockNumber) ?? 0) * 1000,
+          time: (stamps.get(log.blockNumber) ?? Date.now() / 1000) * 1000,
+          venue: sender === locker ? "Creator" : "Uniswap v4",
         };
       })
-      .filter((row) => row.tokenAmount > 0 && row.time > 0)
-      .sort((a, b) => b.time - a.time);
+      .filter((row) => row.tokenAmount > 0);
   } catch {
-    return [];
+    rows = [];
+  }
+
+  if (rows.length === 0) {
+    rows = await fetchTradesFromTransfers(token, window.fromBlock);
+  }
+
+  if (creatorBuy) {
+    const index = rows.findIndex(
+      (row) => row.hash.toLowerCase() === creatorBuy.hash.toLowerCase(),
+    );
+    if (index >= 0) {
+      rows[index] = {
+        ...rows[index],
+        buy: true,
+        trader: creatorBuy.trader || rows[index].trader,
+        tokenAmount: creatorBuy.tokenAmount || rows[index].tokenAmount,
+        usdcAmount: creatorBuy.usdcAmount || rows[index].usdcAmount,
+        venue: "Creator",
+      };
+    } else {
+      rows.push(creatorBuy);
+    }
+  }
+
+  return rows.sort((a, b) => b.time - a.time);
+}
+
+async function resolveLaunch(
+  token: Address,
+  meta?: { poolId?: string; pairAsset?: string },
+) {
+  if (getNetwork().id === "robinhood") {
+    try {
+      const resolved = await resolveRhLaunchFactory(token);
+      if (resolved) {
+        return {
+          poolId: meta?.poolId || resolved.launch[3],
+          pairAsset: meta?.pairAsset || resolved.launch[2],
+          launchedAt: resolved.launch[7],
+          exists: true,
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return {
+    poolId: launchPoolIdForToken({
+      address: token,
+      pairAsset: meta?.pairAsset,
+      poolId: meta?.poolId,
+    }),
+    pairAsset: meta?.pairAsset,
+    launchedAt: undefined,
+    exists: Boolean(meta?.poolId),
+  };
+}
+
+async function fetchCreatorBuy(token: Address): Promise<MarketTrade | null> {
+  const fromLaunch = await readFirstBuyFromLaunch(token);
+  if (fromLaunch) return fromLaunch;
+  return readFirstBuyFromTransfers(token);
+}
+
+async function readFirstBuyFromLaunch(token: Address): Promise<MarketTrade | null> {
+  try {
+    const rh = getNetwork().id === "robinhood";
+    const pad = rh ? await resolveRhLaunchFactory(token) : null;
+    const window = await marketWindow();
+    const logs = (await collectContractLogs({
+      address: pad?.factory ?? protocolOf().factory,
+      event: rh ? rhLaunchedEvent : launchedEvent,
+      args: { token },
+      fromBlock: window.fromBlock,
+      newestFirst: true,
+      limit: 1,
+    })) as {
+      args: {
+        firstBuySpent?: bigint;
+        firstBuyTokens?: bigint;
+        pairAsset?: Address;
+        creator?: Address;
+      };
+      blockNumber: bigint;
+      transactionHash: HexString;
+    }[];
+    const log = logs[0];
+    const spent = log?.args.firstBuySpent ?? 0n;
+    const tokens = log?.args.firstBuyTokens ?? 0n;
+    if (!log || (spent === 0n && tokens === 0n)) return null;
+
+    const [stamps, mark] = await Promise.all([
+      blockTimes([log.blockNumber]),
+      pairMark(log.args.pairAsset),
+    ]);
+    return {
+      hash: log.transactionHash,
+      trader: log.args.creator ?? "",
+      buy: true,
+      tokenAmount: Number(formatUnits(tokens, TOKEN_DECIMALS)),
+      usdcAmount: Number(formatUnits(spent, mark.decimals)),
+      price: 0,
+      time: (stamps.get(log.blockNumber) ?? 0) * 1000,
+      venue: "Creator",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readFirstBuyFromTransfers(token: Address): Promise<MarketTrade | null> {
+  try {
+    const pad =
+      getNetwork().id === "robinhood" ? await resolveRhLaunchFactory(token) : null;
+    const creator = pad?.launch[1];
+    if (!creator) return null;
+
+    const sources = new Set(
+      [
+        pad.locker,
+        pad.factory,
+        protocolOf().locker,
+        protocolOf().factory,
+        protocolOf().v4PoolManager,
+        ZERO,
+      ].map((value) => value.toLowerCase()),
+    );
+
+    const window = await marketWindow(pad.launch[7]);
+    const logs = (await collectContractLogs({
+      address: token,
+      event: transferEvent,
+      args: { to: creator },
+      fromBlock: window.fromBlock,
+      newestFirst: false,
+      limit: 30,
+    })) as {
+      args: { from?: Address; value?: bigint };
+      blockNumber: bigint;
+      transactionHash: HexString;
+    }[];
+    const first = logs.find((log) =>
+      sources.has((log.args.from ?? "").toLowerCase()),
+    );
+    const tokens = first?.args.value ?? 0n;
+    if (!first || tokens === 0n) return null;
+
+    const stamps = await blockTimes([first.blockNumber]);
+    return {
+      hash: first.transactionHash,
+      trader: creator,
+      buy: true,
+      tokenAmount: Number(formatUnits(tokens, TOKEN_DECIMALS)),
+      usdcAmount: 0,
+      price: 0,
+      time: (stamps.get(first.blockNumber) ?? 0) * 1000,
+      venue: "Creator",
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -113,12 +306,14 @@ export async function fetchHolders(
   ]);
 
   try {
-    const logs = await collectLogs({
+    const window = await marketWindow();
+    const logs = (await collectContractLogs({
       address: token,
       event: transferEvent,
+      fromBlock: window.fromBlock,
       newestFirst: true,
       limit: 200,
-    });
+    })) as { args: { from?: Address; to?: Address } }[];
     for (const log of logs) {
       const from = log.args.from?.toLowerCase();
       const to = log.args.to?.toLowerCase();
@@ -192,58 +387,66 @@ function holderLabel(address: string, creator?: string) {
   return null;
 }
 
-async function collectLogs<T>({
-  address,
-  event,
-  args,
-  lookback = 80_000n,
-  newestFirst = false,
-  limit,
-}: {
-  address: Address;
-  event: T;
-  args?: Record<string, unknown>;
-  lookback?: bigint;
-  newestFirst?: boolean;
-  limit?: number;
-}) {
-  const latest = await getPublicClient().getBlockNumber();
-  const fromBlock = latest > lookback ? latest - lookback : 0n;
-  const chunk = 10_000n;
-  const pages: any[] = [];
-
-  if (newestFirst) {
-    for (let end = latest; end >= fromBlock; end -= chunk) {
-      const start = end + 1n - chunk < fromBlock ? fromBlock : end + 1n - chunk;
-      pages.push(
-        await getPublicClient().getLogs({
-          address,
-          event: event as never,
-          args: args as never,
-          fromBlock: start,
-          toBlock: end,
-        }),
-      );
-      const count = pages.reduce((sum, page) => sum + page.length, 0);
-      if (limit && count >= limit) break;
-    }
-    return pages.flat();
-  }
-
-  for (let start = fromBlock; start <= latest; start += chunk) {
-    const end = start + chunk - 1n > latest ? latest : start + chunk - 1n;
-    pages.push(
-      await getPublicClient().getLogs({
-        address,
-        event: event as never,
-        args: args as never,
-        fromBlock: start,
-        toBlock: end,
-      }),
+async function fetchTradesFromTransfers(
+  token: Address,
+  fromBlock: bigint,
+): Promise<MarketTrade[]> {
+  try {
+    const protocol = protocolOf();
+    const skip = new Set(
+      [
+        protocol.v4PoolManager,
+        protocol.locker,
+        protocol.factory,
+        protocol.vault,
+        protocol.v4UniversalRouter,
+        ZERO,
+      ].map((value) => value.toLowerCase()),
     );
+    const pool = protocol.v4PoolManager.toLowerCase();
+    const logs = (await collectContractLogs({
+      address: token,
+      event: transferEvent,
+      fromBlock,
+      newestFirst: true,
+      limit: 80,
+    })) as {
+      args: { from?: Address; to?: Address; value?: bigint };
+      blockNumber: bigint;
+      transactionHash: HexString;
+    }[];
+    const stamps = await blockTimes(logs.map((log) => log.blockNumber));
+    const rows: MarketTrade[] = [];
+    const seen = new Set<string>();
+    for (const log of logs) {
+      const from = (log.args.from ?? "").toLowerCase();
+      const to = (log.args.to ?? "").toLowerCase();
+      const value = log.args.value ?? 0n;
+      if (value <= 0n || seen.has(log.transactionHash)) continue;
+      const buy = from === pool && !skip.has(to);
+      const sell = to === pool && !skip.has(from);
+      if (!buy && !sell) continue;
+      seen.add(log.transactionHash);
+      rows.push({
+        hash: log.transactionHash,
+        trader: buy ? log.args.to ?? "" : log.args.from ?? "",
+        buy,
+        tokenAmount: Number(formatUnits(value, TOKEN_DECIMALS)),
+        usdcAmount: 0,
+        price: 0,
+        time: (stamps.get(log.blockNumber) ?? Date.now() / 1000) * 1000,
+        venue: buy && from === protocol.locker.toLowerCase() ? "Creator" : "Uniswap v4",
+      });
+    }
+    return rows;
+  } catch {
+    return [];
   }
+}
 
-  return pages.flat();
+async function lookbackWindow(lookback: bigint) {
+  const latest = await getPublicClient().getBlockNumber();
+  return { latest, fromBlock: latest > lookback ? latest - lookback : 0n };
 }
 
 async function blockTimes(blocks: bigint[]) {
@@ -251,8 +454,12 @@ async function blockTimes(blocks: bigint[]) {
   const stamps = new Map<bigint, number>();
   await Promise.all(
     unique.map(async (blockNumber) => {
-      const block = await getPublicClient().getBlock({ blockNumber });
-      stamps.set(blockNumber, Number(block.timestamp));
+      try {
+        const block = await getPublicClient().getBlock({ blockNumber });
+        stamps.set(blockNumber, Number(block.timestamp));
+      } catch {
+        /* keep going; the row falls back to now */
+      }
     }),
   );
   return stamps;

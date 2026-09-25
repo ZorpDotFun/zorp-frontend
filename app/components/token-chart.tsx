@@ -11,7 +11,7 @@ import {
 import { TOTAL_SUPPLY } from "../lib/addresses";
 import { formatUsd, formatUsdPrice } from "../lib/tokens";
 
-type Metric = "price" | "mcap" | "candles";
+type Metric = "mcap" | "price" | "candles";
 
 const MODE_KEY = "zorp.tokenChart";
 const TF_KEY = "zorp.tokenChartTf";
@@ -30,10 +30,8 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
-        active
-          ? "bg-yellowell text-black"
-          : "border border-line text-muted hover:text-ink"
+      className={`h-7 px-2 text-[12px] font-semibold ${
+        active ? "text-ink" : "text-muted hover:text-ink"
       }`}
     >
       {label}
@@ -52,9 +50,9 @@ export function TokenChart({
   fdv: number;
   points: ChartPoint[];
 }) {
-  const [metric, setMetric] = useState<Metric>("price");
-  const [range, setRange] = useState<(typeof CHART_WINDOWS)[number]["id"]>("24h");
-  const [timeframe, setTimeframe] = useState<CandleTf>("1D");
+  const [metric, setMetric] = useState<Metric>("mcap");
+  const [range, setRange] = useState<(typeof CHART_WINDOWS)[number]["id"]>("1m");
+  const [timeframe, setTimeframe] = useState<CandleTf>("1h");
 
   useEffect(() => {
     try {
@@ -75,17 +73,22 @@ export function TokenChart({
     }
   }, []);
 
-  const seconds = CHART_WINDOWS.find((item) => item.id === range)?.seconds ?? 86_400;
+  const seconds = CHART_WINDOWS.find((item) => item.id === range)?.seconds ?? 900;
   const windowed = useMemo(
     () => filterWindow(points, seconds),
     [points, seconds],
   );
   const series = useMemo(() => {
-    if (metric !== "mcap") return windowed;
-    return windowed.map((point) => ({
-      ...point,
-      value: point.value * TOTAL_SUPPLY,
-    }));
+    const mapped =
+      metric === "mcap"
+        ? windowed.map((point) => ({
+            ...point,
+            value: point.value * TOTAL_SUPPLY,
+          }))
+        : windowed;
+    if (mapped.length !== 1) return mapped;
+    const only = mapped[0];
+    return [{ time: only.time - 60, value: only.value }, only];
   }, [windowed, metric]);
 
   const last = points[points.length - 1]?.value ?? priceUsd;
@@ -102,90 +105,80 @@ export function TokenChart({
   };
 
   return (
-    <section className="min-w-0 overflow-hidden rounded-3xl bg-raised p-3 ring-1 ring-line sm:p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
+    <section className="min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[13px] text-muted">
-            {metric === "mcap" ? `${ticker} market cap` : `${ticker} price`}
+          <p className="text-[28px] font-semibold tracking-tight text-ink sm:text-[34px]">
+            {metric === "price" ? formatUsdPrice(last) : formatUsd(liveMcap)}
           </p>
-          <p className="mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl">
-            {metric === "mcap" ? formatUsd(liveMcap) : formatUsdPrice(last)}
+          <p className="mt-1 text-[13px] font-medium text-muted">
+            {metric === "price" ? `${ticker} price` : "Market cap"}
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-[13px] text-muted">
-            {metric === "mcap" ? `${ticker} price` : "Market cap"}
-          </p>
-          <p className="mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl">
-            {metric === "mcap" ? formatUsdPrice(last) : formatUsd(liveMcap)}
-          </p>
+        <div className="flex flex-wrap items-center gap-0.5">
+          <Chip
+            active={metric === "mcap"}
+            onClick={() => chooseMetric("mcap")}
+            label="Mcap"
+          />
+          <Chip
+            active={metric === "price"}
+            onClick={() => chooseMetric("price")}
+            label="Price"
+          />
+          <Chip
+            active={candlesOn}
+            onClick={() => chooseMetric("candles")}
+            label="Candles"
+          />
+          <span className="mx-1 h-3 w-px bg-line" />
+          {candlesOn
+            ? CANDLE_FRAMES.map((row) => (
+                <Chip
+                  key={row.id}
+                  label={row.label}
+                  active={timeframe === row.id}
+                  onClick={() => {
+                    setTimeframe(row.id);
+                    try {
+                      localStorage.setItem(TF_KEY, row.id);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                />
+              ))
+            : CHART_WINDOWS.map((row) => (
+                <Chip
+                  key={row.id}
+                  label={row.label}
+                  active={range === row.id}
+                  onClick={() => {
+                    setRange(row.id);
+                    try {
+                      localStorage.setItem(RANGE_KEY, row.id);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                />
+              ))}
         </div>
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-1.5 px-1">
-        <Chip
-          active={metric === "price"}
-          onClick={() => chooseMetric("price")}
-          label="Price"
-        />
-        <Chip
-          active={metric === "mcap"}
-          onClick={() => chooseMetric("mcap")}
-          label="Market cap"
-        />
-        <Chip
-          active={candlesOn}
-          onClick={() => chooseMetric("candles")}
-          label="Candles"
-        />
-        {candlesOn
-          ? CANDLE_FRAMES.map((row) => (
-              <Chip
-                key={row.id}
-                label={row.label}
-                active={timeframe === row.id}
-                onClick={() => {
-                  setTimeframe(row.id);
-                  try {
-                    localStorage.setItem(TF_KEY, row.id);
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-              />
-            ))
-          : CHART_WINDOWS.map((row) => (
-              <Chip
-                key={row.id}
-                label={row.label}
-                active={range === row.id}
-                onClick={() => {
-                  setRange(row.id);
-                  try {
-                    localStorage.setItem(RANGE_KEY, row.id);
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-              />
-            ))}
+      <div className="mt-3 min-h-0">
+        {candlesOn ? (
+          <CandleChart key={timeframe} points={points} timeframe={timeframe} />
+        ) : (
+          <PriceChart
+            key={`${metric}-${range}-${series.length}`}
+            points={series}
+            unit={metric === "mcap" ? "mcap" : "usd"}
+            tone="gold"
+            interactive
+          />
+        )}
       </div>
-
-      {candlesOn ? (
-        <CandleChart
-          key={timeframe}
-          points={points}
-          timeframe={timeframe}
-        />
-      ) : (
-        <PriceChart
-          key={`${metric}-${range}-${series.length}`}
-          points={series}
-          unit={metric === "mcap" ? "mcap" : "usd"}
-          tone="gold"
-          interactive
-        />
-      )}
     </section>
   );
 }

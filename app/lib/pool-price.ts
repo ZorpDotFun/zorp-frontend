@@ -1,7 +1,9 @@
-import { encodeAbiParameters, keccak256, parseAbiItem, type Address } from "viem";
+import { encodeAbiParameters, erc20Abi, keccak256, parseAbiItem, type Address } from "viem";
 import { GRADUATION_MC_USD, LAUNCH_HOOK, TOTAL_SUPPLY, USDC } from "./addresses";
-import { getPublicClient, launchFactoryAbi } from "./factory";
+import { getPublicClient, rhLaunchFactoryAbi } from "./factory";
 import { getNetwork, protocolOf } from "./networks";
+import { isNativeEth, RH_USDG } from "./quote-tokens";
+import { collectContractLogs, marketWindow } from "./rpc-logs";
 import type { ChartPoint } from "./token-chart-data";
 
 const swapEvent = parseAbiItem(
@@ -28,52 +30,146 @@ const stateViewAbi = [
   },
 ] as const;
 
-export function launchPoolKey(token: Address) {
-  const protocol = protocolOf();
-  const pair = protocol.pairAsset;
-  const tokenIs0 = token.toLowerCase() < pair.toLowerCase();
+export function launchPoolKeyFor(
+  token: Address,
+  pairAsset: Address,
+  hook: Address,
+  fee = POOL_FEE,
+  tickSpacing = TICK_SPACING,
+) {
+  const tokenIs0 = token.toLowerCase() < pairAsset.toLowerCase();
   return {
-    currency0: tokenIs0 ? token : pair,
-    currency1: tokenIs0 ? pair : token,
-    fee: POOL_FEE,
-    tickSpacing: TICK_SPACING,
-    hooks: protocol.hook,
+    currency0: tokenIs0 ? token : pairAsset,
+    currency1: tokenIs0 ? pairAsset : token,
+    fee,
+    tickSpacing,
+    hooks: hook,
   };
 }
 
-export function dexscreenerLaunchPairUrl(token: Address | string) {
-  return `https://dexscreener.com/${getNetwork().dexSlug}/${launchPoolId(token as Address)}`;
+export function launchPoolKey(token: Address) {
+  const protocol = protocolOf();
+  return launchPoolKeyFor(token, protocol.pairAsset, protocol.hook);
 }
 
-let pairUsdCache = 1;
+export function dexscreenerLaunchPairUrl(
+  token: Address | string,
+  poolId?: string,
+) {
+  return `https://dexscreener.com/${getNetwork().dexSlug}/${poolId ?? launchPoolId(token as Address)}`;
+}
+
+type PairMark = { decimals: number; usd: number };
+
+const markCache = new Map<string, PairMark & { at: number }>();
+
+const gateUsdAbi = [
+  {
+    type: "function",
+    name: "pairUsd6",
+    stateMutability: "view",
+    inputs: [
+      { name: "pairAsset", type: "address" },
+      { name: "ethUsdMark", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+function defaultMark(): PairMark {
+  const protocol = protocolOf();
+  return protocol.pairDecimals === 6
+    ? { decimals: 6, usd: 1 }
+    : { decimals: protocol.pairDecimals, usd: 1 };
+}
 
 export async function refreshPairUsd() {
-  const protocol = protocolOf();
-  if (protocol.pairDecimals === 6) {
-    pairUsdCache = 1;
-    return pairUsdCache;
-  }
-  if (!protocol.deployed) {
-    pairUsdCache = 3_000;
-    return pairUsdCache;
-  }
-  try {
-    const raw = await getPublicClient().readContract({
-      address: protocol.factory,
-      abi: launchFactoryAbi,
-      functionName: "pairUsdPrice6",
-      args: [protocol.pairAsset],
-    });
-    const usd = Number(raw) / 1e6;
-    if (usd > 0) pairUsdCache = usd;
-  } catch {
-    pairUsdCache = pairUsdCache || 3_000;
-  }
-  return pairUsdCache;
+  const mark = await pairMark();
+  return mark.usd;
 }
 
-export function launchPoolIdFor(token: Address, pairAsset: Address, hook: Address) {
-  const tokenIs0 = token.toLowerCase() < pairAsset.toLowerCase();
+export async function pairMark(pairAsset?: string): Promise<PairMark> {
+  const protocol = protocolOf();
+  const pair = (pairAsset ?? protocol.pairAsset).toLowerCase();
+  const hit = markCache.get(pair);
+  if (hit && Date.now() - hit.at < 30_000) return hit;
+
+  if (getNetwork().id !== "robinhood") {
+    const mark = defaultMark();
+    markCache.set(pair, { ...mark, at: Date.now() });
+    return mark;
+  }
+
+  if (!protocol.deployed) {
+    const mark = { decimals: 18, usd: 3_000 };
+    markCache.set(pair, { ...mark, at: Date.now() });
+    return mark;
+  }
+
+  try {
+    const client = getPublicClient();
+    const ethUsd6 = await client.readContract({
+      address: protocol.factory,
+      abi: rhLaunchFactoryAbi,
+      functionName: "ethUsd6",
+    });
+    const ethUsd = Number(ethUsd6) / 1e6;
+
+    if (isNativeEth(pair) || pair === protocol.pairAsset.toLowerCase()) {
+      const mark = { decimals: 18, usd: ethUsd > 0 ? ethUsd : 3_000 };
+      markCache.set(pair, { ...mark, at: Date.now() });
+      return mark;
+    }
+
+    if (pair === RH_USDG.toLowerCase()) {
+      const mark = { decimals: 6, usd: 1 };
+      markCache.set(pair, { ...mark, at: Date.now() });
+      return mark;
+    }
+
+    const gate = await client.readContract({
+      address: protocol.factory,
+      abi: rhLaunchFactoryAbi,
+      functionName: "gate",
+    });
+    const [pairUsd6, decimals] = await Promise.all([
+      client.readContract({
+        address: gate,
+        abi: gateUsdAbi,
+        functionName: "pairUsd6",
+        args: [pair as Address, ethUsd6],
+      }),
+      client.readContract({
+        address: pair as Address,
+        abi: erc20Abi,
+        functionName: "decimals",
+      }),
+    ]);
+    const usd = Number(pairUsd6) / 1e6;
+    const mark = {
+      decimals: Number(decimals),
+      usd: usd > 0 ? usd : 0,
+    };
+    markCache.set(pair, { ...mark, at: Date.now() });
+    return mark;
+  } catch {
+    const fallback =
+      getNetwork().id === "robinhood"
+        ? { decimals: 18, usd: 3_000 }
+        : defaultMark();
+    markCache.set(pair, { ...fallback, at: Date.now() });
+    return fallback;
+  }
+}
+
+export function launchPoolIdFor(
+  token: Address,
+  pairAsset: Address,
+  hook: Address,
+  fee = POOL_FEE,
+  tickSpacing = TICK_SPACING,
+) {
+  const key = launchPoolKeyFor(token, pairAsset, hook, fee, tickSpacing);
   return keccak256(
     encodeAbiParameters(
       [
@@ -88,15 +184,7 @@ export function launchPoolIdFor(token: Address, pairAsset: Address, hook: Addres
           ],
         },
       ],
-      [
-        {
-          currency0: tokenIs0 ? token : pairAsset,
-          currency1: tokenIs0 ? pairAsset : token,
-          fee: POOL_FEE,
-          tickSpacing: TICK_SPACING,
-          hooks: hook,
-        },
-      ],
+      [key],
     ),
   );
 }
@@ -104,6 +192,25 @@ export function launchPoolIdFor(token: Address, pairAsset: Address, hook: Addres
 export function launchPoolId(token: Address) {
   const protocol = protocolOf();
   return launchPoolIdFor(token, protocol.pairAsset, protocol.hook);
+}
+
+export function launchPoolIdForToken(token: {
+  address: Address | string;
+  pairAsset?: string;
+  poolFee?: number;
+  poolId?: string;
+}) {
+  if (token.poolId) return token.poolId;
+  const protocol = protocolOf();
+  if (!token.pairAsset) return launchPoolId(token.address as Address);
+  const spacing = getNetwork().id === "robinhood" ? 200 : TICK_SPACING;
+  return launchPoolIdFor(
+    token.address as Address,
+    token.pairAsset as Address,
+    protocol.hook,
+    token.poolFee ?? POOL_FEE,
+    spacing,
+  );
 }
 
 export function arcLaunchPoolId(token: Address) {
@@ -122,27 +229,59 @@ export function quoteWeiFromSqrt(sqrtPriceX96: bigint, tokenIsCurrency0: boolean
 }
 
 /** Quote-asset units per 1 whole launch token, converted to USD. */
-export function usdPerTokenFromSqrt(sqrtPriceX96: bigint, tokenIsCurrency0: boolean) {
-  if (sqrtPriceX96 === 0n) return 0;
-  const protocol = protocolOf();
+export function usdPerTokenFromSqrt(
+  sqrtPriceX96: bigint,
+  tokenIsCurrency0: boolean,
+  mark: PairMark = defaultMark(),
+) {
+  if (sqrtPriceX96 === 0n || !(mark.usd > 0)) return 0;
   const wei = quoteWeiFromSqrt(sqrtPriceX96, tokenIsCurrency0);
   if (wei === 0n) return 0;
-  const quote = Number(wei) / 10 ** protocol.pairDecimals;
+  const quote = Number(wei) / 10 ** mark.decimals;
   if (!Number.isFinite(quote) || quote <= 0) return 0;
-  return quote * (protocol.pairDecimals === 6 ? 1 : pairUsdCache);
+  return quote * mark.usd;
 }
 
-export async function readLiveUsdPrice(token: Address, tokenIsCurrency0: boolean) {
-  const prices = await readLiveUsdPrices([{ address: token, tokenIsCurrency0 }]);
+/** Official pool first. Dexscreener is fallback only — never Math.max the two. */
+export function preferOfficialUsd(
+  live: number | null | undefined,
+  dex: number | null | undefined,
+  fallback: number,
+) {
+  if (live && live > 0) return live;
+  if (dex && dex > 0) return dex;
+  return fallback;
+}
+
+export async function readLiveUsdPrice(
+  token: Address,
+  tokenIsCurrency0: boolean,
+  pair?: { pairAsset?: string; poolFee?: number },
+) {
+  const prices = await readLiveUsdPrices([
+    { address: token, tokenIsCurrency0, pairAsset: pair?.pairAsset, poolFee: pair?.poolFee },
+  ]);
   return prices.get(token.toLowerCase()) ?? null;
 }
 
 export async function readLiveUsdPrices(
-  rows: { address: Address; tokenIsCurrency0: boolean }[],
+  rows: {
+    address: Address;
+    tokenIsCurrency0: boolean;
+    pairAsset?: string;
+    poolFee?: number;
+    poolId?: string;
+  }[],
 ) {
   const prices = new Map<string, number>();
   if (rows.length === 0) return prices;
-  await refreshPairUsd();
+  const uniquePairs = [...new Set(rows.map((row) => row.pairAsset ?? protocolOf().pairAsset))];
+  const marks = new Map<string, PairMark>();
+  await Promise.all(
+    uniquePairs.map(async (pair) => {
+      marks.set(pair.toLowerCase(), await pairMark(pair));
+    }),
+  );
   const protocol = protocolOf();
   try {
     const results = await getPublicClient().multicall({
@@ -151,12 +290,17 @@ export async function readLiveUsdPrices(
         address: protocol.v4StateView,
         abi: stateViewAbi,
         functionName: "getSlot0",
-        args: [launchPoolId(row.address)],
+        args: [launchPoolIdForToken(row)],
       })),
     });
     results.forEach((item, index) => {
       if (item.status !== "success") return;
-      const price = usdPerTokenFromSqrt(item.result[0], rows[index].tokenIsCurrency0);
+      const pair = (rows[index].pairAsset ?? protocol.pairAsset).toLowerCase();
+      const price = usdPerTokenFromSqrt(
+        item.result[0],
+        rows[index].tokenIsCurrency0,
+        marks.get(pair) ?? defaultMark(),
+      );
       if (Number.isFinite(price) && price > 0) {
         prices.set(rows[index].address.toLowerCase(), price);
       }
@@ -171,14 +315,15 @@ export async function readLiveUsdPrices(
 export async function launchPeakFdv(
   token: Address,
   tokenIsCurrency0: boolean,
+  pair?: { pairAsset?: string; poolFee?: number; poolId?: string },
 ) {
   try {
-    await refreshPairUsd();
+    const mark = await pairMark(pair?.pairAsset);
     const latest = await getPublicClient().getBlockNumber();
     const lookback = 80_000n;
     const fromBlock = latest > lookback ? latest - lookback : 0n;
     const chunk = 4_000n;
-    const poolId = launchPoolId(token);
+    const poolId = pair ? launchPoolIdForToken({ address: token, ...pair }) : launchPoolId(token);
     let peak = 0;
 
     for (let end = latest; end >= fromBlock; end -= chunk) {
@@ -195,6 +340,7 @@ export async function launchPeakFdv(
           const price = usdPerTokenFromSqrt(
             log.args.sqrtPriceX96 ?? 0n,
             tokenIsCurrency0,
+            mark,
           );
           if (price > 0) peak = Math.max(peak, price * TOTAL_SUPPLY);
         }
@@ -221,10 +367,12 @@ export async function launchEverGraduated(
 export async function fetchSwapPrints(
   token: Address,
   tokenIsCurrency0: boolean,
+  poolId?: string,
+  pairAsset?: string,
 ): Promise<ChartPoint[]> {
   try {
-    await refreshPairUsd();
-    const logs = await collectSwapLogs(token, { limit: 80, lookback: 24_000n });
+    const mark = await pairMark(pairAsset);
+    const logs = await collectSwapLogs(token, { limit: 80, poolId });
     if (logs.length === 0) return [];
     const stamps = await stampSwapBlocks(logs.map((log) => log.blockNumber));
 
@@ -234,6 +382,7 @@ export async function fetchSwapPrints(
         const value = usdPerTokenFromSqrt(
           log.args.sqrtPriceX96 ?? 0n,
           tokenIsCurrency0,
+          mark,
         );
         return { time, value };
       })
@@ -246,37 +395,27 @@ export async function fetchSwapPrints(
 
 async function collectSwapLogs(
   token: Address,
-  opts?: { limit?: number; lookback?: bigint },
+  opts?: { limit?: number; lookback?: bigint; poolId?: string },
 ) {
-  const latest = await getPublicClient().getBlockNumber();
-  const lookback = opts?.lookback ?? 24_000n;
   const limit = opts?.limit ?? 80;
-  const fromBlock = latest > lookback ? latest - lookback : 0n;
-  const chunk = 3_000n;
-  const poolId = launchPoolId(token);
-  // Concrete getLogs overloads do not survive a shared client type.
-  const pages: any[] = [];
-  void pages;
-
-  for (let end = latest; end >= fromBlock; end -= chunk) {
-    const start = end + 1n - chunk < fromBlock ? fromBlock : end + 1n - chunk;
-    try {
-      pages.push(
-        await getPublicClient().getLogs({
-          address: protocolOf().v4PoolManager,
-          event: swapEvent,
-          args: { id: poolId },
-          fromBlock: start,
-          toBlock: end,
-        }),
-      );
-    } catch {
-      continue;
-    }
-    if (pages.reduce((sum, page) => sum + page.length, 0) >= limit) break;
-  }
-
-  return pages.flat();
+  const window =
+    opts?.lookback != null
+      ? await (async () => {
+          const latest = await getPublicClient().getBlockNumber();
+          return {
+            fromBlock: latest > opts.lookback! ? latest - opts.lookback! : 0n,
+          };
+        })()
+      : await marketWindow();
+  const poolId = (opts?.poolId as Address | undefined) ?? launchPoolId(token);
+  return collectContractLogs({
+    address: protocolOf().v4PoolManager,
+    event: swapEvent,
+    args: { id: poolId },
+    fromBlock: window.fromBlock,
+    newestFirst: true,
+    limit,
+  });
 }
 
 async function stampSwapBlocks(blocks: bigint[]) {

@@ -61,6 +61,46 @@ export function useErc20Balance(
   };
 }
 
+export function useNativeBalance(address: Address | undefined) {
+  const [raw, setRaw] = useState<bigint | null>(null);
+
+  useEffect(() => {
+    if (!address) {
+      setRaw(null);
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      try {
+        const balance = await publicClient.getBalance({ address: address as Address });
+        if (!cancelled) setRaw(balance);
+      } catch {
+        if (!cancelled) setRaw(null);
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 15_000);
+    window.addEventListener(MARKET_REFRESH, load);
+    window.addEventListener(NETWORK_EVENT, load);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener(MARKET_REFRESH, load);
+      window.removeEventListener(NETWORK_EVENT, load);
+    };
+  }, [address]);
+
+  return {
+    raw,
+    formatted:
+      raw == null
+        ? null
+        : Number(formatUnits(raw, 18)).toLocaleString(undefined, {
+            maximumFractionDigits: 4,
+          }),
+  };
+}
+
 export function useUsdcBalance(address: Address | undefined) {
   const [raw, setRaw] = useState<bigint | null>(null);
   const [error, setError] = useState<string | null>(null);

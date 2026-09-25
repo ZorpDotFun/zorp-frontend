@@ -4,17 +4,11 @@ export const NETWORK_STORAGE_KEY = "zorp-network";
 export const NETWORK_EVENT = "zorp-network-change";
 
 export function getNetworkId(): NetworkId {
-  if (typeof window === "undefined") return "arc";
-  try {
-    return window.localStorage.getItem(NETWORK_STORAGE_KEY) === "robinhood"
-      ? "robinhood"
-      : "arc";
-  } catch {
-    return "arc";
-  }
+  return "robinhood";
 }
 
 export function setNetworkId(id: NetworkId) {
+  if (id === "arc") return;
   try {
     window.localStorage.setItem(NETWORK_STORAGE_KEY, id);
   } catch {

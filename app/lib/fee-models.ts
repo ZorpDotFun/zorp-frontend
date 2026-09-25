@@ -9,13 +9,7 @@ export type FeeConfig = {
   protocolBps: number;
 };
 
-export type FeeModelId =
-  | "creator"
-  | "diamond"
-  | "buyback"
-  | "autolp"
-  | "tribute"
-  | "custom";
+export type FeeModelId = "creator" | "holders";
 
 export const MAX_TAX_BPS = 1_000;
 export const SPLIT_BPS = 10_000;
@@ -31,8 +25,8 @@ export const FEE_MODELS: {
 }[] = [
   {
     id: "creator",
-    label: "Creator backed",
-    blurb: "Tax goes to the token creator.",
+    label: "Creator fees to creator",
+    blurb: "Creator cut goes to the token creator.",
     taxBps: 100,
     split: {
       creatorBps: 10_000,
@@ -44,69 +38,13 @@ export const FEE_MODELS: {
     },
   },
   {
-    id: "diamond",
-    label: "Diamond hands",
-    blurb: "Tax is paid to holders as USDC dividends.",
+    id: "holders",
+    label: "Creator fees to holders",
+    blurb: "Creator cut is pushed to current holders once the pot hits $50.",
     taxBps: 300,
     split: {
       creatorBps: 0,
       dividendBps: 10_000,
-      buybackBps: 0,
-      autoLpBps: 0,
-      tributeBps: 0,
-      protocolBps: 0,
-    },
-  },
-  {
-    id: "buyback",
-    label: "Deflationary",
-    blurb: "Tax buys the token back and burns it.",
-    taxBps: 300,
-    split: {
-      creatorBps: 0,
-      dividendBps: 0,
-      buybackBps: 10_000,
-      autoLpBps: 0,
-      tributeBps: 0,
-      protocolBps: 0,
-    },
-  },
-  {
-    id: "autolp",
-    label: "Auto-LP",
-    blurb: "Tax is added back into the locked pool.",
-    taxBps: 300,
-    split: {
-      creatorBps: 0,
-      dividendBps: 0,
-      buybackBps: 0,
-      autoLpBps: 10_000,
-      tributeBps: 0,
-      protocolBps: 0,
-    },
-  },
-  {
-    id: "tribute",
-    label: "Tribute",
-    blurb: "Tax is sent to a wallet you choose.",
-    taxBps: 300,
-    split: {
-      creatorBps: 0,
-      dividendBps: 0,
-      buybackBps: 0,
-      autoLpBps: 0,
-      tributeBps: 10_000,
-      protocolBps: 0,
-    },
-  },
-  {
-    id: "custom",
-    label: "Custom",
-    blurb: "Split the tax across destinations. Must total 100%.",
-    taxBps: 100,
-    split: {
-      creatorBps: 10_000,
-      dividendBps: 0,
       buybackBps: 0,
       autoLpBps: 0,
       tributeBps: 0,
@@ -193,20 +131,11 @@ export function clampTaxBps(value: string) {
 
 export function feeDestinationLine(fees: FeeConfig) {
   const label = feeModelLabel(fees);
-  if (label === "Auto-LP") {
-    return "All fees are directed to liquidity.";
-  }
-  if (label === "Creator backed") {
+  if (label === "Creator fees to creator") {
     return "All fees are directed to the creator.";
   }
-  if (label === "Diamond hands") {
-    return "All fees are directed to holders as USDC dividends.";
-  }
-  if (label === "Deflationary") {
-    return "All fees are directed to buyback and burn.";
-  }
-  if (label === "Tribute") {
-    return "All fees are directed to the tribute wallet.";
+  if (label === "Creator fees to holders") {
+    return "All fees are directed to holders.";
   }
   const parts = (
     [
@@ -225,8 +154,6 @@ export function feeDestinationLine(fees: FeeConfig) {
 export function feeModelLabel(fees: FeeConfig) {
   const match = FEE_MODELS.find(
     (model) =>
-      model.taxBps === fees.buyTaxBps &&
-      model.taxBps === fees.sellTaxBps &&
       model.split.creatorBps === fees.creatorBps &&
       model.split.dividendBps === fees.dividendBps &&
       model.split.buybackBps === fees.buybackBps &&

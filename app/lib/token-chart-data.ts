@@ -1,12 +1,15 @@
 import { TOTAL_SUPPLY } from "./addresses";
+import { getNetwork } from "./networks";
 
 export type ChartPoint = { time: number; value: number };
 
 const WINDOWS = [
+  { id: "1m", label: "1m", seconds: 60 },
+  { id: "5m", label: "5m", seconds: 300 },
+  { id: "15m", label: "15m", seconds: 900 },
+  { id: "1h", label: "1h", seconds: 3_600 },
+  { id: "4h", label: "4h", seconds: 14_400 },
   { id: "24h", label: "24h", seconds: 86_400 },
-  { id: "7d", label: "7d", seconds: 7 * 86_400 },
-  { id: "3mo", label: "3mo", seconds: 90 * 86_400 },
-  { id: "6mo", label: "6mo", seconds: 180 * 86_400 },
 ] as const;
 
 export const CHART_WINDOWS = WINDOWS;
@@ -59,7 +62,7 @@ export function toCandles(points: ChartPoint[], bucketSec: number): Candle[] {
 }
 
 export function dexscreenerTokenUrl(token: string) {
-  return `https://dexscreener.com/arc/${token}`;
+  return `https://dexscreener.com/${getNetwork().dexSlug}/${token}`;
 }
 
 export function openingPriceUsd() {
@@ -147,8 +150,15 @@ export async function fetchDexscreenerMarkets(
 }
 
 function pickDexPair(pairs: DexPair[], officialPoolId?: string): DexMarket | null {
-  const arcPairs = pairs.filter((item) => item.chainId === "arc");
-  const ranked = [...(arcPairs.length > 0 ? arcPairs : pairs)].sort(
+  const network = getNetwork();
+  const slugs = new Set(
+    [network.dexSlug, network.id, String(network.chainId)].map((item) => item.toLowerCase()),
+  );
+  const chainPairs = pairs.filter((item) =>
+    slugs.has((item.chainId ?? "").toLowerCase()),
+  );
+  if (chainPairs.length === 0) return null;
+  const ranked = [...chainPairs].sort(
     (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
   );
   const official = officialPoolId?.toLowerCase();
@@ -176,5 +186,7 @@ function pickDexPair(pairs: DexPair[], officialPoolId?: string): DexMarket | nul
 export function filterWindow(points: ChartPoint[], seconds: number) {
   if (seconds <= 0) return points;
   const cutoff = Date.now() / 1000 - seconds;
-  return points.filter((point) => point.time >= cutoff);
+  const windowed = points.filter((point) => point.time >= cutoff);
+  if (windowed.length > 0) return windowed;
+  return points.slice(-1);
 }

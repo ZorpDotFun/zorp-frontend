@@ -37,7 +37,27 @@ Official Uniswap row + `eth_getCode` on `https://rpc.mainnet.chain.robinhood.com
 - V4 PositionManager: `0x58daec3116aae6D93017bAAea7749052E8a04fA7`
 - V4 StateView: `0xF3334192D15450CdD385c8B70e03f9A6bD9E673b`
 - V4 Quoter: `0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94`
-- V4 Universal Router: `0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99`
+- V4 Universal Router: `0x8876789976dEcBfCbBbe364623C63652db8C0904`
 - Permit2: `0x000000000022D473030F116dDEE9F6B43aC78BA3`
 
-Zorp factory / hook / locker / council: empty until `DeployRobinhood.s.sol` is broadcast. Then fill `VITE_RH_*` in the frontend env.
+Zorp (`rh-contracts/script/Deploy.s.sol`, 24 Sep 2026). Vault `collect` moves token-side fees to the locker then swaps them into the pair so creator + protocol both get the base asset. Hook flags unchanged (auto-allowlist, not `0x91`). Owner is the deployer EOA, `launchEnabled() == true`. `setVault` is on this factory.
+
+- Deployer / owner: `0x91ac26b715185D91aE361fef5ACB24743210EfF7`
+- RhHook: `0x8fE6C922520E6e16340711f95Ac0779fD0aAEA80`
+- RhLaunchFactory: `0xcca8D6BE7619A328f5f61Af924E5575A0A8F98F3`
+- RhLocker: `0x7eD74076e9d773568605A372768a894B74940139`
+- RhFeeVault: `0x7105D89966a2CDAd52801Ca8d23ebf072982236E`
+- LiquidityGate: `0x6eA8Ec83D04409bEDa11c4F9D9631E5670BD2929`
+- RhEthFiller: `0xdC814d88B18912bE11cD5Ed38EcB3Bc959397308`
+- RhRevenueTreasury: `0xf13be4DB32D226d57cdCa9239f382B76bB5F0e6D`
+
+Sourcify 4663. Official explorer verify is Blockscout (`--verifier blockscout --verifier-url https://robinhoodchain.blockscout.com/api/`). Re-run `rh-contracts/script/verify-rh.sh`. New launches POST `/api/verify` (Sourcify + Blockscout).
+
+Previous factories:
+
+- `0x5Dcc32117EA6cB7E18dD81d4cfBda371FC88193B` (ABCD / PREDICT / 1234 — vault could not swap token-side)
+- `0x94A7771Fda51AB22efDc82a038EB279bc36B8f66` (PFWA / first-buy)
+- `0x68b211870E0B3bf420cbD550Be0C7caF691435a4`
+- `0xF343FFbAb2e1C52ae1323E5D623be643B8D46471`
+
+Broadcast: `rh-contracts/broadcast/Deploy.s.sol/4663/run-latest.json`. Fill `VITE_RH_LAUNCH_FACTORY`, `VITE_RH_LAUNCH_HOOK`, `VITE_RH_LAUNCH_LOCKER` in the frontend env.

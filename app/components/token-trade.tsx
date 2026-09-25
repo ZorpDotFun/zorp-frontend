@@ -8,13 +8,26 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { formatUnits, type Address } from "viem";
+import { TOTAL_SUPPLY } from "../lib/addresses";
 import { useNetwork } from "../lib/use-network";
-import { explorerTx } from "../lib/factory";
+import { explorerTx, readPairToken } from "../lib/factory";
 import { openWalletAuth } from "../lib/privy-wallet";
 import { requestMarketRefresh, type MarketTrade } from "../lib/token-market";
 import { formatUsd, formatUsdPrice } from "../lib/tokens";
-import { minOut, parseTradeAmount, quoteExactIn, swapExactIn } from "../lib/trade";
-import { useErc20Balance, useUsdcBalance } from "../lib/use-usdc-balance";
+import { isNativeEth } from "../lib/quote-tokens";
+import {
+  fillEthToPair,
+  minOut,
+  parseTradeAmount,
+  quoteEthToPair,
+  quoteExactIn,
+  quotePairToEth,
+  readErc20Balance,
+  swapExactIn,
+  swapPoolForToken,
+  unwindPairToEth,
+} from "../lib/trade";
+import { useErc20Balance, useNativeBalance } from "../lib/use-usdc-balance";
 import { usePrivyReady } from "./app-privy-provider";
 
 const TOKEN_DECIMALS = 18;
@@ -22,144 +35,382 @@ const TOKEN_DECIMALS = 18;
 export function TokenTrade({
   token,
   ticker,
+  pair,
+  pairAsset,
+  poolFee,
   tokenIsCurrency0,
   priceUsd,
+  details,
 }: {
   token: string;
   ticker: string;
+  pair?: string;
+  pairAsset?: string;
+  poolFee?: number;
   tokenIsCurrency0: boolean;
   priceUsd: number;
+  details?: ReactNode;
 }) {
   const { network } = useNetwork();
-  const pairDecimals = network.protocol.pairDecimals;
-  const pairSymbol = network.protocol.pairSymbol;
+  const [pairDecimals, setPairDecimals] = useState(network.protocol.pairDecimals);
+  const pairSymbol = pair || network.protocol.pairSymbol;
+  const pool = useMemo(
+    () => swapPoolForToken({ pairAsset, poolFee }),
+    [pairAsset, poolFee],
+  );
   const privyReady = usePrivyReady();
+  const { authenticated } = usePrivy();
+  const { wallets } = useWallets();
   const [buying, setBuying] = useState(true);
+  const [useEth, setUseEth] = useState(false);
   const [pay, setPay] = useState("");
   const [quoted, setQuoted] = useState<bigint | null>(null);
+  const [quotedEth, setQuotedEth] = useState<bigint | null>(null);
+  const [pairFromEth, setPairFromEth] = useState<bigint | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [success, setSuccess] = useState<TradeSuccess | null>(null);
+  const [openDetails, setOpenDetails] = useState(false);
+  const walletAddress = wallets[0]?.address as Address | undefined;
+  const nativePair = Boolean(pairAsset && isNativeEth(pairAsset));
+  const canUseEth =
+    network.id === "robinhood" && Boolean(pairAsset) && !nativePair;
+  const payEth = canUseEth && useEth;
+  const pairBal = useErc20Balance(
+    buying && pairAsset && !nativePair && !payEth ? (pairAsset as Address) : undefined,
+    authenticated && buying && !nativePair && !payEth ? walletAddress : undefined,
+    pairDecimals,
+  );
+  const nativeBal = useNativeBalance(
+    authenticated && buying && (nativePair || payEth) ? walletAddress : undefined,
+  );
+  const tokenBal = useErc20Balance(
+    !buying ? (token as Address) : undefined,
+    authenticated && !buying ? walletAddress : undefined,
+    TOKEN_DECIMALS,
+  );
+  const maxRaw = buying
+    ? nativePair || payEth
+      ? nativeBal.raw
+      : pairBal.raw
+    : tokenBal.raw;
+  const payDecimals = buying ? (payEth ? 18 : pairDecimals) : TOKEN_DECIMALS;
+  const paySymbol = buying ? (payEth ? "ETH" : pairSymbol) : ticker;
+  const receiveSymbol = buying ? ticker : payEth ? "ETH" : pairSymbol;
+
+  useEffect(() => {
+    if (!pairAsset || isNativeEth(pairAsset)) {
+      setPairDecimals(network.protocol.pairDecimals);
+      return;
+    }
+    let cancelled = false;
+    void readPairToken(pairAsset as Address).then((info) => {
+      if (!cancelled) setPairDecimals(info.decimals);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pairAsset, network.protocol.pairDecimals]);
 
   const amountIn = useMemo(() => {
     try {
-      return parseTradeAmount(pay, buying);
+      return parseTradeAmount(pay, buying, payDecimals);
     } catch {
       return 0n;
     }
-  }, [pay, buying]);
+  }, [pay, buying, payDecimals]);
 
   useEffect(() => {
     if (amountIn <= 0n) {
       setQuoted(null);
+      setQuotedEth(null);
+      setPairFromEth(null);
       return;
     }
     let cancelled = false;
     setQuoting(true);
     const timer = window.setTimeout(() => {
-      void quoteExactIn({
-        token: token as Address,
-        tokenIsCurrency0,
-        buying,
-        amountIn,
-      })
-        .then((out) => {
-          if (!cancelled) setQuoted(out);
-        })
-        .catch(() => {
-          if (!cancelled) setQuoted(null);
-        })
-        .finally(() => {
+      void (async () => {
+        try {
+          let poolIn = amountIn;
+          if (buying && payEth && pairAsset) {
+            poolIn = await quoteEthToPair(pairAsset as Address, amountIn, pairDecimals);
+            if (cancelled) return;
+            setPairFromEth(poolIn);
+          } else {
+            setPairFromEth(null);
+          }
+          const out = await quoteExactIn({
+            token: token as Address,
+            tokenIsCurrency0,
+            buying,
+            amountIn: poolIn,
+            pool,
+          });
+          if (cancelled) return;
+          setQuoted(out);
+          if (!buying && payEth && pairAsset && out > 0n) {
+            setQuotedEth(await quotePairToEth(pairAsset as Address, out, pairDecimals));
+          } else {
+            setQuotedEth(null);
+          }
+        } catch {
+          if (!cancelled) {
+            setQuoted(null);
+            setQuotedEth(null);
+            setPairFromEth(null);
+          }
+        } finally {
           if (!cancelled) setQuoting(false);
-        });
+        }
+      })();
     }, 280);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [amountIn, buying, token, tokenIsCurrency0]);
+  }, [amountIn, buying, payEth, pairAsset, pairDecimals, token, tokenIsCurrency0, pool]);
 
-  const receive = quoted
-    ? Number(formatUnits(quoted, buying ? TOKEN_DECIMALS : pairDecimals))
-    : 0;
-  const payUsd = buying
-    ? Number(pay || 0)
-    : Number(pay || 0) * priceUsd;
-  const receiveUsd = buying ? receive * priceUsd : receive;
+  const receive = buying
+    ? quoted
+      ? Number(formatUnits(quoted, TOKEN_DECIMALS))
+      : 0
+    : payEth
+      ? quotedEth
+        ? Number(formatUnits(quotedEth, 18))
+        : 0
+      : quoted
+        ? Number(formatUnits(quoted, pairDecimals))
+        : 0;
+  const rate =
+    amountIn > 0n && receive > 0
+      ? buying
+        ? receive / Number(pay || 0)
+        : Number(pay || 0) / receive
+      : 0;
+  const chips = buying
+    ? pairChips(payEth ? "ETH" : pairSymbol)
+    : [
+        { label: "25%", value: "pct:25" },
+        { label: "50%", value: "pct:50" },
+        { label: "75%", value: "pct:75" },
+        { label: "Max", value: "max" },
+      ];
+  const owned = tokenBal.raw != null ? Number(formatUnits(tokenBal.raw, TOKEN_DECIMALS)) : 0;
+  const ownedShare = TOTAL_SUPPLY > 0 ? (owned / TOTAL_SUPPLY) * 100 : 0;
 
   return (
-    <div className="mt-6 space-y-3">
-      <TradeLeg
-        label={buying ? "You pay" : "You sell"}
-        value={pay}
-        onChange={setPay}
-        usd={payUsd}
-        symbol={buying ? pairSymbol : ticker}
-        balanceSlot={
-          privyReady ? (
-            <PayBalance
-              buying={buying}
-              token={token}
-              onMax={(next) => setPay(next)}
-            />
-          ) : (
-            <span className="text-[12px] text-muted">Connect to see balance</span>
-          )
-        }
-      />
-
-      <div className="flex justify-center">
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 rounded-full bg-canvas p-1 ring-1 ring-line">
         <button
           type="button"
           onClick={() => {
-            setBuying((value) => !value);
+            setBuying(true);
             setPay("");
             setQuoted(null);
+            setQuotedEth(null);
           }}
-          className="grid size-9 place-items-center rounded-full bg-surface text-muted ring-1 ring-line hover:text-ink"
-          aria-label="Switch buy and sell"
+          className={`h-9 rounded-full text-[14px] font-semibold ${
+            buying ? "bg-ink text-canvas" : "text-muted"
+          }`}
         >
-          ↕
+          Buy
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setBuying(false);
+            setPay("");
+            setQuoted(null);
+            setQuotedEth(null);
+          }}
+          className={`h-9 rounded-full text-[14px] font-semibold ${
+            !buying ? "bg-down text-ink" : "text-muted"
+          }`}
+        >
+          Sell
         </button>
       </div>
 
-      <TradeLeg
-        label={buying ? "You receive" : "You get"}
-        value={quoting ? "…" : receive ? formatReceive(receive, buying) : "0"}
-        usd={receiveUsd}
-        symbol={buying ? ticker : pairSymbol}
-        readOnly
-        balanceSlot={
-          privyReady ? (
-            <ReceiveBalance buying={buying} token={token} ticker={ticker} />
+      {buying && payEth ? (
+        <p className="text-[12px] text-muted">
+          {(nativeBal.formatted ?? "0")} ETH available
+        </p>
+      ) : null}
+      {!buying ? (
+        <p className="text-[12px] text-muted">
+          {(tokenBal.formatted ?? "0")} {ticker} available
+        </p>
+      ) : null}
+
+      <label className="block rounded-2xl bg-canvas px-4 py-3 ring-1 ring-line">
+        <span className="text-[12px] text-muted">
+          {buying ? "Buy" : "Sell"}
+        </span>
+        <div className="mt-1 flex items-end gap-2">
+          <input
+            inputMode="decimal"
+            value={pay}
+            onChange={(event) => setPay(event.target.value)}
+            placeholder="0"
+            className="min-w-0 flex-1 bg-transparent text-[32px] font-semibold tracking-tight text-ink outline-none"
+          />
+          {buying ? (
+            <AssetSelect
+              value={payEth ? "eth" : "pair"}
+              disabled={!canUseEth}
+              pairLabel={pairSymbol}
+              onChange={(next) => {
+                setUseEth(next === "eth");
+                setPay("");
+                setQuoted(null);
+                setQuotedEth(null);
+              }}
+            />
           ) : (
-            <span className="text-[12px] text-muted">Connect to see balance</span>
-          )
-        }
-      />
+            <span className="pb-1 text-[14px] font-semibold text-muted">{ticker}</span>
+          )}
+        </div>
+        {!buying && Number(pay) > 0 && priceUsd > 0 ? (
+          <p className="mt-1 text-[12px] text-muted">
+            {formatUsd(Number(pay) * priceUsd)}
+          </p>
+        ) : null}
+      </label>
+
+      <div className="grid grid-cols-4 gap-2">
+        {chips.map((chip) => (
+          <button
+            key={chip.label}
+            type="button"
+            onClick={() => {
+              if (chip.value === "max" || chip.value.startsWith("pct:")) {
+                if (maxRaw == null || maxRaw <= 0n) return;
+                const pct = chip.value === "max" ? 100 : Number(chip.value.slice(4));
+                const cut = (maxRaw * BigInt(pct)) / 100n;
+                setPay(formatUnits(cut, payDecimals));
+                return;
+              }
+              setPay(chip.value);
+            }}
+            className="h-9 rounded-xl bg-canvas text-[12px] font-semibold text-ink ring-1 ring-line hover:ring-yellowell"
+          >
+            {chip.label}
+          </button>
+        ))}
+      </div>
+
+      {!buying ? (
+        <div className="rounded-2xl bg-canvas px-4 py-3 ring-1 ring-line">
+          <span className="text-[12px] text-muted">Receive</span>
+          <div className="mt-1 flex items-end gap-2">
+            <p className="min-w-0 flex-1 text-[32px] font-semibold tracking-tight text-ink">
+              {quoting
+                ? "…"
+                : receive > 0
+                  ? formatReceive(receive, payEth)
+                  : "0"}
+            </p>
+            <AssetSelect
+              value={payEth ? "eth" : "pair"}
+              disabled={!canUseEth}
+              pairLabel={pairSymbol}
+              onChange={(next) => {
+                setUseEth(next === "eth");
+                setQuotedEth(null);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between text-[13px]">
+        <span className="text-muted">Slippage</span>
+        <span className="text-ink">1.5%</span>
+      </div>
 
       {privyReady ? (
         <TradeSubmit
           token={token}
           ticker={ticker}
+          pairSymbol={pairSymbol}
+          receiveSymbol={receiveSymbol}
+          pairAsset={pairAsset}
+          poolFee={poolFee}
           tokenIsCurrency0={tokenIsCurrency0}
           buying={buying}
+          useEth={payEth}
+          pairDecimals={pairDecimals}
           amountIn={amountIn}
+          pairFromEth={pairFromEth}
           quoted={quoted}
+          quotedEth={quotedEth}
           onSuccess={(row) => {
             setSuccess(row);
             setPay("");
             setQuoted(null);
+            setQuotedEth(null);
           }}
         />
       ) : (
         <button
           type="button"
           disabled
-          className="flex h-12 w-full items-center justify-center rounded-full bg-yellowell text-[15px] font-bold text-black opacity-60"
+          className="flex h-12 w-full items-center justify-center rounded-full bg-ink text-[15px] font-bold text-canvas opacity-60"
         >
-          Connect wallet
+          Connect wallet to trade
         </button>
       )}
+
+      {quoting || receive > 0 || rate > 0 ? (
+        <dl className="space-y-1.5 text-[12px]">
+          <div className="flex items-start justify-between gap-3">
+            <dt className="text-muted">Pricing</dt>
+            <dd className="text-right text-ink">
+              {quoting
+                ? "…"
+                : rate > 0
+                  ? buying
+                    ? `1 ${paySymbol} ≈ ${formatTradeQty(rate, true)} ${ticker}`
+                    : `1 ${ticker} ≈ ${formatReceive(1 / rate, payEth)} ${receiveSymbol}`
+                  : "Enter an amount"}
+            </dd>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <dt className="text-muted">You receive</dt>
+            <dd className="text-right text-ink">
+              {quoting
+                ? "…"
+                : receive > 0
+                  ? `${formatReceive(receive, buying || payEth)} ${receiveSymbol}`
+                  : `0 ${receiveSymbol}`}
+            </dd>
+          </div>
+        </dl>
+      ) : null}
+
+      {details ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpenDetails((open) => !open)}
+            className="flex w-full items-center justify-between text-[13px] text-muted hover:text-ink"
+          >
+            Details
+            <span className={`text-[10px] ${openDetails ? "rotate-180" : ""}`}>▾</span>
+          </button>
+          {openDetails ? (
+            <div className="mt-2 space-y-2 text-[12px] leading-5 text-muted">{details}</div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!buying ? (
+        <p className="text-[12px] text-muted">
+          You own {formatTradeQty(owned, true)} {ticker} (
+          {ownedShare.toFixed(2)}% of supply)
+        </p>
+      ) : null}
+
       {success ? (
         <TradeSuccessModal {...success} onClose={() => setSuccess(null)} />
       ) : null}
@@ -167,115 +418,57 @@ export function TokenTrade({
   );
 }
 
-function TradeLeg({
-  label,
+function AssetSelect({
   value,
+  pairLabel,
   onChange,
-  usd,
-  symbol,
-  balanceSlot,
-  readOnly,
+  disabled = false,
 }: {
-  label: string;
-  value: string;
-  onChange?: (value: string) => void;
-  usd: number;
-  symbol: string;
-  balanceSlot: ReactNode;
-  readOnly?: boolean;
+  value: "pair" | "eth";
+  pairLabel: string;
+  onChange: (next: "pair" | "eth") => void;
+  disabled?: boolean;
 }) {
-  return (
-    <div className="rounded-2xl bg-surface px-4 py-4 ring-1 ring-line">
-      <p className="text-[11px] font-medium tracking-[0.16em] text-muted uppercase">
-        {label}
-      </p>
-      <input
-        inputMode="decimal"
-        readOnly={readOnly}
-        value={value}
-        onChange={(event) => onChange?.(event.target.value)}
-        placeholder="0"
-        className="mt-2 w-full bg-transparent font-display text-[32px] tracking-wide text-ink outline-none"
-      />
-      <p className="text-[13px] text-muted">{formatUsd(Math.max(usd, 0))}</p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <span className="rounded-full bg-raised px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line">
-          {symbol}
-        </span>
-        {balanceSlot}
-      </div>
-    </div>
-  );
-}
-
-function PayBalance({
-  buying,
-  token,
-  onMax,
-}: {
-  buying: boolean;
-  token: string;
-  onMax: (value: string) => void;
-}) {
-  const { network } = useNetwork();
-  const { authenticated } = usePrivy();
-  const { wallets } = useWallets();
-  const address = wallets[0]?.address as Address | undefined;
-  const usdc = useUsdcBalance(authenticated && buying ? address : undefined);
-  const launch = useErc20Balance(
-    buying ? undefined : (token as Address),
-    authenticated && !buying ? address : undefined,
-    TOKEN_DECIMALS,
-  );
-  const formatted = buying ? usdc.formatted : launch.formatted;
-  const raw = buying ? usdc.raw : launch.raw;
-
-  if (!authenticated || !address) {
-    return <span className="text-[12px] text-muted">Connect to see balance</span>;
+  if (disabled) {
+    return <span className="pb-1 text-[14px] font-semibold text-muted">{pairLabel}</span>;
   }
   return (
-    <button
-      type="button"
-      onClick={() => {
-        if (raw == null) return;
-        onMax(formatUnits(raw, buying ? network.protocol.pairDecimals : TOKEN_DECIMALS));
-      }}
-      className="text-[12px] text-muted hover:text-ink"
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value === "eth" ? "eth" : "pair")}
+      className="rounded-full bg-raised px-2.5 py-1 text-[13px] font-semibold text-ink ring-1 ring-line outline-none"
     >
-      {formatted ?? "…"} · Max
-    </button>
+      <option value="pair">{pairLabel}</option>
+      <option value="eth">ETH</option>
+    </select>
   );
 }
 
-function ReceiveBalance({
-  buying,
-  token,
-  ticker,
-}: {
-  buying: boolean;
-  token: string;
-  ticker: string;
-}) {
-  const { network } = useNetwork();
-  const { authenticated } = usePrivy();
-  const { wallets } = useWallets();
-  const address = wallets[0]?.address as Address | undefined;
-  const usdc = useUsdcBalance(authenticated && !buying ? address : undefined);
-  const launch = useErc20Balance(
-    buying ? (token as Address) : undefined,
-    authenticated && buying ? address : undefined,
-    TOKEN_DECIMALS,
-  );
-  const formatted = buying ? launch.formatted : usdc.formatted;
-  if (!authenticated || !address) {
-    return <span className="text-[12px] text-muted">Connect to see balance</span>;
+function pairChips(pairSymbol: string) {
+  if (pairSymbol === "ETH") {
+    return [
+      { label: "0.01", value: "0.01" },
+      { label: "0.05", value: "0.05" },
+      { label: "0.1", value: "0.1" },
+      { label: "Max", value: "max" },
+    ];
   }
-  return (
-    <span className="text-[12px] text-muted">
-      {formatted ?? "…"} {buying ? ticker : network.protocol.pairSymbol}
-    </span>
-  );
+  if (pairSymbol === "USDG" || pairSymbol === "USDC") {
+    return [
+      { label: "$10", value: "10" },
+      { label: "$50", value: "50" },
+      { label: "$100", value: "100" },
+      { label: "$1000", value: "1000" },
+    ];
+  }
+  return [
+    { label: "0.01", value: "0.01" },
+    { label: "0.05", value: "0.05" },
+    { label: "0.1", value: "0.1" },
+    { label: "Max", value: "max" },
+  ];
 }
+
 
 type TradeSuccess = {
   buying: boolean;
@@ -283,29 +476,44 @@ type TradeSuccess = {
   paid: string;
   received: string;
   hash: string;
-  pairSymbol: string;
+  paySymbol: string;
+  receiveSymbol: string;
 };
 
 function TradeSubmit({
   token,
   ticker,
+  pairSymbol,
+  receiveSymbol,
+  pairAsset,
+  poolFee,
   tokenIsCurrency0,
   buying,
+  useEth,
+  pairDecimals,
   amountIn,
+  pairFromEth,
   quoted,
+  quotedEth,
   onSuccess,
 }: {
   token: string;
   ticker: string;
+  pairSymbol: string;
+  receiveSymbol: string;
+  pairAsset?: string;
+  poolFee?: number;
   tokenIsCurrency0: boolean;
   buying: boolean;
+  useEth: boolean;
+  pairDecimals: number;
   amountIn: bigint;
+  pairFromEth: bigint | null;
   quoted: bigint | null;
+  quotedEth: bigint | null;
   onSuccess: (row: TradeSuccess) => void;
 }) {
-  const { network } = useNetwork();
-  const pairDecimals = network.protocol.pairDecimals;
-  const pairSymbol = network.protocol.pairSymbol;
+  const pool = swapPoolForToken({ pairAsset, poolFee });
   const { ready, authenticated } = usePrivy();
   const { wallets } = useWallets();
   const { login } = useLogin();
@@ -335,20 +543,55 @@ function TradeSubmit({
     setPending(true);
     setError(null);
     try {
+      const pair = pairAsset as Address | undefined;
+      const account = wallet.address as Address;
+      let poolIn = amountIn;
+      let pairBefore = 0n;
+      if (buying && useEth) {
+        if (!pair || !pairFromEth || pairFromEth <= 0n) {
+          throw new Error("Could not price this buy in ETH.");
+        }
+        poolIn = pairFromEth;
+        await fillEthToPair({
+          wallet,
+          pair,
+          pairOut: pairFromEth,
+          ethIn: amountIn,
+        });
+      }
+      if (!buying && useEth && pair) {
+        pairBefore = await readErc20Balance(pair, account);
+      }
+
       const tx = await swapExactIn({
         wallet,
         token: token as Address,
         tokenIsCurrency0,
         buying,
-        amountIn,
+        amountIn: poolIn,
         amountOutMin: minOut(quoted),
+        pool,
       });
-      const paid = Number(
-        formatUnits(amountIn, buying ? pairDecimals : TOKEN_DECIMALS),
-      );
-      const received = Number(
-        formatUnits(quoted, buying ? TOKEN_DECIMALS : pairDecimals),
-      );
+
+      if (!buying && useEth && pair) {
+        const pairAfter = await readErc20Balance(pair, account);
+        const pairOut = pairAfter > pairBefore ? pairAfter - pairBefore : quoted;
+        if (pairOut > 0n) {
+          await unwindPairToEth({
+            wallet,
+            pair,
+            amountIn: pairOut,
+            pairDecimals,
+          });
+        }
+      }
+
+      const payDecimals = buying ? (useEth ? 18 : pairDecimals) : TOKEN_DECIMALS;
+      const outAmount =
+        buying ? quoted : useEth && quotedEth != null && quotedEth > 0n ? quotedEth : quoted;
+      const outDecimals = buying || useEth ? 18 : pairDecimals;
+      const paid = Number(formatUnits(amountIn, payDecimals));
+      const received = Number(formatUnits(outAmount, outDecimals));
       const trade: MarketTrade = {
         hash: tx,
         trader: wallet.address,
@@ -362,10 +605,11 @@ function TradeSubmit({
       onSuccess({
         buying,
         ticker,
-        paid: formatTradeQty(paid, !buying),
-        received: formatReceive(received, buying),
+        paid: formatTradeQty(paid, !buying || useEth),
+        received: formatReceive(received, buying || useEth),
         hash: tx,
-        pairSymbol,
+        paySymbol: buying ? (useEth ? "ETH" : pairSymbol) : ticker,
+        receiveSymbol,
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Swap failed.");
@@ -380,10 +624,16 @@ function TradeSubmit({
         type="button"
         disabled={!ready || pending}
         onClick={() => void onSubmit()}
-        className="flex h-12 w-full items-center justify-center rounded-full bg-yellowell text-[15px] font-bold text-black disabled:opacity-60"
+        className={`flex h-12 w-full items-center justify-center rounded-full text-[15px] font-bold disabled:opacity-60 ${
+          !authenticated
+            ? "bg-ink text-canvas"
+            : buying
+              ? "bg-yellowell text-black"
+              : "bg-down text-ink"
+        }`}
       >
         {!authenticated
-          ? "Connect wallet"
+          ? "Connect wallet to trade"
           : pending
             ? "Swapping…"
             : buying
@@ -402,7 +652,8 @@ function TradeSuccessModal({
   received,
   hash,
   onClose,
-  pairSymbol,
+  paySymbol,
+  receiveSymbol,
 }: TradeSuccess & { onClose: () => void }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -434,8 +685,8 @@ function TradeSuccessModal({
         </p>
         <p className="mt-1 text-[13px] text-muted">
           {buying
-            ? `Paid ${paid} ${pairSymbol}`
-            : `Received ${received} ${pairSymbol}`}
+            ? `Paid ${paid} ${paySymbol}`
+            : `Received ${received} ${receiveSymbol}`}
         </p>
         <a
           href={explorerTx(hash)}
