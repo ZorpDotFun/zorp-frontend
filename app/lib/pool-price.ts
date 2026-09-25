@@ -153,10 +153,11 @@ export async function pairMark(pairAsset?: string): Promise<PairMark> {
     markCache.set(pair, { ...mark, at: Date.now() });
     return mark;
   } catch {
-    const fallback =
-      getNetwork().id === "robinhood"
-        ? { decimals: 18, usd: 3_000 }
-        : defaultMark();
+    const ethLike =
+      isNativeEth(pair) || pair === protocol.pairAsset.toLowerCase();
+    const fallback = ethLike
+      ? { decimals: 18, usd: 3_000 }
+      : { decimals: 18, usd: 0 };
     markCache.set(pair, { ...fallback, at: Date.now() });
     return fallback;
   }

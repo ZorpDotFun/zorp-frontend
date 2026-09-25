@@ -1,10 +1,11 @@
 import { HomeHero } from "../components/home-hero";
 import { HowItWorks } from "../components/how-it-works";
 import { TrendingTokens } from "../components/trending-tokens";
+import type { Token } from "../lib/tokens";
 import { useLaunches } from "../lib/use-launches";
 
-export function HomePage() {
-  const launches = useLaunches();
+export function HomePage({ seed = [] }: { seed?: Token[] }) {
+  const launches = useLaunches(seed);
 
   return (
     <div className="relative flex flex-col gap-8 sm:gap-10">

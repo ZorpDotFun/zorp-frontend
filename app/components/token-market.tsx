@@ -46,7 +46,7 @@ export function TokenMarket({
           address,
           tokenIsCurrency0,
           lookback,
-          { poolId, pairAsset },
+          { poolId, pairAsset, creator },
         );
         if (!cancelled) setTrades((prev) => mergeTrades(prev, nextTrades));
       } catch {
@@ -97,10 +97,10 @@ export function TokenMarket({
     <section className="min-w-0 rounded-[24px] bg-raised px-4 ring-1 ring-line sm:px-5">
       <div className="flex items-center gap-2 py-3">
         <TabButton active={tab === "holders"} onClick={() => setTab("holders")}>
-          Holders (top 100)
+          Holders
         </TabButton>
         <TabButton active={tab === "trades"} onClick={() => setTab("trades")}>
-          Trades (24h)
+          Trades
         </TabButton>
       </div>
 
@@ -259,7 +259,7 @@ function mergeTrades(prev: MarketTrade[] | null, next: MarketTrade[]) {
     const existing = byHash.get(key);
     if (!existing || row.venue === "Creator") byHash.set(key, row);
   }
-  return [...byHash.values()].sort((a, b) => b.time - a.time).slice(0, 50);
+  return [...byHash.values()].sort((a, b) => b.time - a.time);
 }
 
 function formatQty(value: number) {

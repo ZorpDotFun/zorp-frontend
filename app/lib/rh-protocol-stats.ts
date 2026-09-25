@@ -23,7 +23,7 @@ const DAY = 86_400;
 const HOUR = 3_600;
 const HALF_HOUR = 1_800;
 const MAX_LOG_BLOCKS = 400_000n;
-const CACHE_KEY = "zorp-rh-protocol-stats-v2";
+const CACHE_KEY = "zorp-rh-protocol-stats-v3";
 /** First RH pad went live in this window. Charts start here unless an earlier launch exists. */
 export const RH_FACTORY_LIVE = Math.floor(Date.UTC(2026, 8, 20) / 1000);
 const ZERO_POOL = `0x${"0".repeat(64)}` as Hex;
@@ -472,7 +472,7 @@ function assembleRh(snap: RhSnap): ProtocolStats {
   const creators = new Set(
     snap.launches.map((row) => row.creator.toLowerCase()).filter(Boolean),
   );
-  const swappedAll = sumSince(snap.swapPrints, 0);
+  const volumeAll = sumSince(snap.swapPrints, 0);
   const collectedFees = sumSince(snap.feePrints, 0);
   const collectedCreator = sumSince(snap.creatorPrints, 0);
   const claimedAll = sumSince(snap.claimPrints, 0);
@@ -481,9 +481,6 @@ function assembleRh(snap: RhSnap): ProtocolStats {
     collectedCreator + snap.creatorUncollected,
     claimedAll + snap.creatorUncollected,
   );
-  const feeBps = snap.protocolFeeBps > 0 ? snap.protocolFeeBps : 100;
-  const impliedVolume = feesAll > 0 ? feesAll / (feeBps / 10_000) : 0;
-  const volumeAll = Math.max(swappedAll, impliedVolume);
   const launchPrints = launchTimes.map((time) => ({ time, value: 1 }));
 
   return {
@@ -524,10 +521,6 @@ function mergeRh(prev: ProtocolStats | null, next: ProtocolStats): ProtocolStats
   if (!prev) return next;
   return {
     ...next,
-    volumeAll: Math.max(prev.volumeAll, next.volumeAll),
-    feesAll: Math.max(prev.feesAll, next.feesAll),
-    creatorFeesAll: Math.max(prev.creatorFeesAll, next.creatorFeesAll),
-    claimedAll: Math.max(prev.claimedAll, next.claimedAll),
     launchesAll: Math.max(prev.launchesAll, next.launchesAll),
     uniqueDevs: Math.max(prev.uniqueDevs, next.uniqueDevs),
     volumeReady: prev.volumeReady || next.volumeReady,

@@ -1089,26 +1089,53 @@ export async function pairLabel(pairAsset: Address): Promise<string> {
   return `${pairAsset.slice(0, 6)}…${pairAsset.slice(-4)}`;
 }
 
-async function readRhLaunch(address: Address): Promise<Token | null> {
-  const resolved = await resolveRhLaunchFactory(address);
-  if (!resolved) return null;
-  const launch = resolved.launch;
+const RH_META = [
+  "name",
+  "symbol",
+  "image",
+  "description",
+  "twitter",
+  "telegram",
+  "website",
+  "creator",
+] as const;
+
+async function readRhTokenMeta(address: Address) {
+  try {
+    const rows = await publicClient.multicall({
+      allowFailure: false,
+      contracts: RH_META.map((functionName) => ({
+        address,
+        abi: rhTokenAbi,
+        functionName,
+      })),
+    });
+    return rows as [string, string, string, string, string, string, string, Address];
+  } catch {
+    const rows = await Promise.all(
+      RH_META.map((functionName) =>
+        publicClient.readContract({
+          address,
+          abi: rhTokenAbi,
+          functionName,
+        }),
+      ),
+    );
+    return rows as [string, string, string, string, string, string, string, Address];
+  }
+}
+
+function tokenFromRhPad(
+  address: Address,
+  pad: RhPad,
+  meta: readonly [string, string, string, string, string, string, string, Address],
+  pairName: string,
+) {
+  const launch = pad.launch;
   const pairAsset = launch[2];
-  const [name, symbol, image, description, twitter, telegram, website, creator, pairName] =
-    await Promise.all([
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "name" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "symbol" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "image" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "description" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "twitter" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "telegram" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "website" }),
-      publicClient.readContract({ address, abi: rhTokenAbi, functionName: "creator" }),
-      pairLabel(pairAsset),
-    ]);
   const token = toToken(
     address,
-    [creator, name, symbol, image, description, twitter, telegram, website],
+    [meta[7], meta[0], meta[1], meta[2], meta[3], meta[4], meta[5], meta[6]],
     launch[7],
     pairAsset,
     address.toLowerCase() < pairAsset.toLowerCase(),
@@ -1119,6 +1146,17 @@ async function readRhLaunch(address: Address): Promise<Token | null> {
   token.poolFee = Number(launch[4]);
   rememberLaunch(token);
   return token;
+}
+
+async function readRhLaunch(address: Address): Promise<Token | null> {
+  const resolved = await resolveRhLaunchFactory(address);
+  if (!resolved) return null;
+  const pairAsset = resolved.launch[2];
+  const [meta, pairName] = await Promise.all([
+    readRhTokenMeta(address),
+    pairLabel(pairAsset),
+  ]);
+  return tokenFromRhPad(address, resolved, meta, pairName);
 }
 
 export async function readLaunch(address: Address): Promise<Token | null> {
@@ -1243,6 +1281,133 @@ export async function readCurrentRhLaunches(): Promise<Token[]> {
   return readRhLaunches([protocol.factory]);
 }
 
+async function loadRhPads(factory: Address, tokens: Address[]) {
+  if (tokens.length === 0) return;
+  try {
+    const launches = await publicClient.multicall({
+      allowFailure: true,
+      contracts: tokens.map((token) => ({
+        address: factory,
+        abi: rhLaunchFactoryAbi,
+        functionName: "launches" as const,
+        args: [token],
+      })),
+    });
+    const protocol = protocolOf();
+    const current = sameAddress(factory, protocol.factory);
+    const [vault, locker] = await Promise.all([
+      current
+        ? Promise.resolve(protocol.vault)
+        : publicClient
+            .readContract({
+              address: factory,
+              abi: rhLaunchFactoryAbi,
+              functionName: "vault",
+            })
+            .catch(() => protocol.vault),
+      current
+        ? Promise.resolve(protocol.locker)
+        : publicClient
+            .readContract({
+              address: factory,
+              abi: rhLaunchFactoryAbi,
+              functionName: "locker",
+            })
+            .catch(() => protocol.locker),
+    ]);
+    tokens.forEach((token, index) => {
+      const row = launches[index];
+      if (row.status !== "success" || !row.result[8]) return;
+      rhPadCache.set(token.toLowerCase(), {
+        factory,
+        vault,
+        locker,
+        launch: row.result,
+      });
+    });
+  } catch {
+    await Promise.all(tokens.map((token) => loadRhPad(token, factory)));
+  }
+}
+
+async function pairLabelsFor(assets: Address[]) {
+  const unique = [...new Set(assets.map((asset) => asset.toLowerCase()))];
+  const rows = await Promise.all(
+    unique.map(async (key) => {
+      const asset = assets.find((row) => row.toLowerCase() === key);
+      return [key, asset ? await pairLabel(asset) : key.slice(0, 8)] as const;
+    }),
+  );
+  return new Map(rows);
+}
+
+async function readRhLaunchRows(addresses: Address[]): Promise<Token[]> {
+  if (addresses.length === 0) return [];
+  await Promise.all(addresses.map((address) => resolveRhLaunchFactory(address)));
+
+  let metas: { status: "success" | "failure"; result?: unknown }[];
+  try {
+    metas = await publicClient.multicall({
+      allowFailure: true,
+      contracts: addresses.flatMap((address) =>
+        RH_META.map((functionName) => ({
+          address,
+          abi: rhTokenAbi,
+          functionName,
+        })),
+      ),
+    });
+  } catch {
+    const rows = await Promise.all(
+      addresses.map(async (address) => {
+        try {
+          return await readRhLaunch(address);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return rows.filter((row): row is Token => row !== null);
+  }
+
+  const pairAssets = addresses
+    .map((address) => rhPadCache.get(address.toLowerCase())?.launch[2])
+    .filter((asset): asset is Address => Boolean(asset));
+  const labels = await pairLabelsFor(pairAssets);
+
+  const rows = await Promise.all(
+    addresses.map(async (address, index) => {
+      const pad = rhPadCache.get(address.toLowerCase());
+      const slice = metas.slice(index * RH_META.length, (index + 1) * RH_META.length);
+      if (pad?.launch[8] && slice.every((row) => row.status === "success")) {
+        const meta = slice.map((row) => row.result) as [
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          Address,
+        ];
+        const pairAsset = pad.launch[2];
+        return tokenFromRhPad(
+          address,
+          pad,
+          meta,
+          labels.get(pairAsset.toLowerCase()) ?? "WETH",
+        );
+      }
+      try {
+        return await readRhLaunch(address);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return rows.filter((row): row is Token => row !== null);
+}
+
 async function readRhLaunches(factories: Address[]): Promise<Token[]> {
   const seen = new Set<string>();
   const addresses: Address[] = [];
@@ -1253,9 +1418,7 @@ async function readRhLaunches(factories: Address[]): Promise<Token[]> {
     })),
   );
   await Promise.all(
-    groups.flatMap(({ factory, tokens }) =>
-      tokens.map((token) => loadRhPad(token, factory)),
-    ),
+    groups.map(({ factory, tokens }) => loadRhPads(factory, tokens)),
   );
   for (const { tokens } of groups) {
     for (const token of tokens) {
@@ -1265,7 +1428,7 @@ async function readRhLaunches(factories: Address[]): Promise<Token[]> {
       addresses.push(token);
     }
   }
-  const rows = await readLaunchRows(addresses);
+  const rows = await readRhLaunchRows(addresses);
   return rows.sort((a, b) => b.launchedAt - a.launchedAt);
 }
 
@@ -1317,16 +1480,7 @@ async function readAllTokenAddresses(indexes: bigint[]): Promise<Address[]> {
 
 async function readLaunchRows(addresses: Address[]): Promise<Token[]> {
   if (isRh()) {
-    const rows = await Promise.all(
-      addresses.map(async (address) => {
-        try {
-          return await readRhLaunch(address);
-        } catch {
-          return null;
-        }
-      }),
-    );
-    return rows.filter((row): row is Token => row !== null);
+    return readRhLaunchRows(addresses);
   }
   try {
     const [infos, launches] = await Promise.all([

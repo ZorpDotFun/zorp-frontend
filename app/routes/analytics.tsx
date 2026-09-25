@@ -63,11 +63,11 @@ export default function Analytics() {
 
   return (
     <PageWash>
-    <main className="mx-auto max-w-[1180px] space-y-10 px-4 pb-16 pt-6 sm:px-6">
-      <section>
-        <div className="flex flex-wrap items-end justify-between gap-6">
+    <main className="mx-auto w-full min-w-0 max-w-[1180px] space-y-8 overflow-x-hidden px-4 pb-16 pt-6 sm:space-y-10 sm:px-6">
+      <section className="min-w-0">
+        <div className="flex flex-col items-start gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-6">
           <h1 className="page-title page-title-lg">Analytics</h1>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex max-w-full flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-6 sm:gap-y-3">
             <RangeChip active={range === "24h"} onClick={() => setRange("24h")}>
               24h
             </RangeChip>
@@ -96,7 +96,7 @@ export default function Analytics() {
         {error ? (
           <p className="mt-8 text-[14px] text-down">{error}</p>
         ) : (
-          <div className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-6 sm:mt-10 sm:gap-8 lg:grid-cols-3">
             <Stat label="Volume" value={<AnimatedUsd value={volume} />} />
             <Stat label="Launches" value={formatStatCount(launches)} />
             <Stat
@@ -109,7 +109,7 @@ export default function Analytics() {
         )}
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-4 sm:gap-5 lg:grid-cols-2">
         <BarCard
           title="Volume"
           value={<AnimatedUsd value={volume} compact />}
@@ -191,11 +191,18 @@ function Stat({
   value: ReactNode;
 }) {
   return (
-    <div>
-      <p className="page-lede text-[14px]">{label}</p>
-      <p className="page-title mt-2 text-[34px] sm:text-[40px]">{value}</p>
+    <div className="min-w-0">
+      <p className="page-lede text-[12px] sm:text-[14px]">{label}</p>
+      <p className="page-title mt-1.5 break-words text-[26px] leading-none sm:mt-2 sm:text-[40px]">
+        {value}
+      </p>
     </div>
   );
+}
+
+function axisLabel(label?: string) {
+  if (!label) return "";
+  return label.split(",")[0] ?? label;
 }
 
 function candleHeight(value: number, max: number) {
@@ -224,7 +231,7 @@ function BarCard({
   const total = lifetime && lifetime > 0
     ? lifetime
     : days.reduce((sum, day) => sum + day.value, 0);
-  const dense = days.length > 24;
+  const dense = days.length > 48;
   const [hover, setHover] = useState<number | null>(null);
   const active = hover !== null ? days[hover] : null;
   const activeLabel = active
@@ -237,15 +244,13 @@ function BarCard({
     : null;
 
   return (
-    <section className="rounded-3xl bg-raised px-5 py-6 ring-1 ring-line sm:px-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="page-title text-[22px]">{title}</h2>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <p className="page-title text-[22px]">{value}</p>
+    <section className="min-w-0 overflow-hidden rounded-3xl bg-raised px-4 py-5 ring-1 ring-line sm:px-6 sm:py-6">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <h2 className="page-title text-[20px] sm:text-[22px]">{title}</h2>
+        <div className="flex items-center justify-between gap-3 sm:flex-col sm:items-end">
+          <p className="page-title min-w-0 text-[20px] sm:text-[22px]">{value}</p>
           {onInterval ? (
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-3">
               <RangeChip
                 active={interval === VOLUME_INTERVALS["30m"]}
                 onClick={() => onInterval(VOLUME_INTERVALS["30m"])}
@@ -262,11 +267,8 @@ function BarCard({
           ) : null}
         </div>
       </div>
-      <div className={`mt-6 ${dense ? "overflow-x-auto" : ""}`}>
-        <div
-          className={`flex h-48 items-end ${dense ? "gap-px" : "gap-1.5"}`}
-          style={dense ? { minWidth: `${Math.max(days.length * 12, 280)}px` } : undefined}
-        >
+      <div className="mt-5 min-w-0">
+        <div className={`flex h-40 min-w-0 items-end sm:h-48 ${dense ? "gap-px" : "gap-1"}`}>
           {days.map((day, index) => {
             const height = candleHeight(day.value, max);
             const last = index === days.length - 1;
@@ -274,11 +276,10 @@ function BarCard({
             return (
               <div
                 key={day.time}
-                className={`relative flex h-full flex-1 cursor-pointer flex-col justify-end ${
-                  dense ? "min-w-[10px]" : "min-w-0"
-                }`}
+                className="relative flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-end"
                 onMouseEnter={() => setHover(index)}
                 onMouseLeave={() => setHover(null)}
+                onClick={() => setHover(index)}
               >
                 <div className="absolute inset-0 rounded-sm hover:bg-yellowell/10" />
                 <div
@@ -298,11 +299,11 @@ function BarCard({
           })}
         </div>
       </div>
-      <div className="mt-3 min-h-[40px] text-[12px] leading-5">
+      <div className="mt-3 min-h-[40px] min-w-0 text-[12px] leading-5">
         {active && activeLabel ? (
-          <div>
-            <p className="text-muted">{activeLabel}</p>
-            <p className="font-semibold text-ink">
+          <div className="min-w-0">
+            <p className="break-words text-muted">{activeLabel}</p>
+            <p className="font-semibold break-words text-ink">
               {activeValue}
               {total > 0 && active.value > 0 ? (
                 <span className="ml-1.5 font-normal text-muted">
@@ -312,9 +313,11 @@ function BarCard({
             </p>
           </div>
         ) : (
-          <div className="flex justify-between text-[11px] text-muted">
-            <span>{days[0]?.label} UTC</span>
-            <span>{days[days.length - 1]?.label} UTC</span>
+          <div className="flex min-w-0 justify-between gap-3 text-[11px] text-muted">
+            <span className="min-w-0 truncate">{axisLabel(days[0]?.label)}</span>
+            <span className="min-w-0 truncate text-right">
+              {axisLabel(days[days.length - 1]?.label)}
+            </span>
           </div>
         )}
       </div>

@@ -4,10 +4,20 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  if (env.BLOCKSCOUT_API_KEY) {
+    process.env.BLOCKSCOUT_API_KEY = env.BLOCKSCOUT_API_KEY;
+  }
+  if (env.ETHERSCAN_API_KEY) {
+    process.env.ETHERSCAN_API_KEY = env.ETHERSCAN_API_KEY;
+  }
+  if (env.ALCHEMY_API_KEY) {
+    process.env.ALCHEMY_API_KEY = env.ALCHEMY_API_KEY;
+  }
+  if (env.ALCHEMY_HTTPS) {
+    process.env.ALCHEMY_HTTPS = env.ALCHEMY_HTTPS;
+  }
   const privyAppId = env.VITE_PRIVY_APP_ID || env.PRIVY_APP_ID || "";
   const privyClientId = env.VITE_PRIVY_CLIENT_ID || env.PRIVY_CLIENT_ID || "";
-  if (env.QUICKNODE_HTTPS) process.env.QUICKNODE_HTTPS = env.QUICKNODE_HTTPS;
-  if (env.VITE_RH_RPC) process.env.VITE_RH_RPC = env.VITE_RH_RPC;
 
   return {
     plugins: [tailwindcss(), reactRouter()],

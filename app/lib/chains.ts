@@ -1,5 +1,6 @@
 import { defineChain, fallback, http } from "viem";
 import { MULTICALL3 } from "./addresses";
+import { PUBLIC_RH_RPC, rhRpcTargets, rhRpcTimeout } from "./rh-server-rpc";
 
 export const ARC_CHAIN_ID = 5042;
 export const ARC_EXPLORER =
@@ -40,17 +41,16 @@ export const ROBINHOOD_PUBLIC_RPC = "https://rpc.mainnet.chain.robinhood.com";
 export const RH_RPC_PROXY = "/api/rh-rpc";
 
 function serverRhRpc() {
-  if (typeof process === "undefined") return ROBINHOOD_PUBLIC_RPC;
-  return (
-    process.env.QUICKNODE_HTTPS?.trim() ||
-    process.env.VITE_RH_RPC?.trim() ||
-    ROBINHOOD_PUBLIC_RPC
-  );
+  return ROBINHOOD_PUBLIC_RPC;
 }
 
-/** Browser talks to our proxy so the QuickNode key never ships to users. */
+/** Browser talks to our proxy so the RPC key never ships to users. */
 export function robinhoodRpcUrl() {
-  if (typeof document !== "undefined") {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.location?.origin === "string" &&
+    window.location.origin.startsWith("http")
+  ) {
     return `${window.location.origin}${RH_RPC_PROXY}`;
   }
   return serverRhRpc();
@@ -95,10 +95,10 @@ export function arcTransport() {
 export function robinhoodTransport() {
   return fallback(
     [
-      http(robinhoodRpcUrl(), {
+      http(ROBINHOOD_PUBLIC_RPC, {
         timeout: 8_000,
         retryCount: 0,
-        fetchFn: rhFetch,
+        fetchFn: (input, init) => rhFetch(robinhoodRpcUrl(), init),
       }),
     ],
     { rank: false },
@@ -120,17 +120,43 @@ async function rhFetch(input: RequestInfo | URL, init?: RequestInit) {
   return failoverFetch(target, init);
 }
 
+function rhFailoverQueue(input: RequestInfo | URL) {
+  const first =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : String(input);
+  if (first.includes(RH_RPC_PROXY)) return [first];
+  if (first !== PUBLIC_RH_RPC && !first.includes("robinhood")) return [first];
+  return [first, ...rhRpcTargets().filter((url) => url !== first)].filter(
+    (url, index, all) => Boolean(url) && all.indexOf(url) === index,
+  );
+}
+
 async function failoverFetch(input: RequestInfo | URL, init?: RequestInit) {
-  const response = await fetch(input, init);
-  const text = await response.text();
-  if (response.status === 429 || response.status === 503 || deadRpc(text)) {
-    throw new Error(`rpc ${response.status}`);
+  let lastError: Error | null = null;
+  for (const target of rhFailoverQueue(input)) {
+    try {
+      const response = await fetch(target, {
+        ...init,
+        signal: init?.signal ?? AbortSignal.timeout(rhRpcTimeout(target)),
+      });
+      const text = await response.text();
+      if (response.status === 429 || response.status === 503 || deadRpc(text)) {
+        lastError = new Error(`rpc ${response.status}`);
+        continue;
+      }
+      return new Response(text, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("rpc failed");
+    }
   }
-  return new Response(text, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  throw lastError ?? new Error("rpc failed");
 }
 
 function deadRpc(body: string) {

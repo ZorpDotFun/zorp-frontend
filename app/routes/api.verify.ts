@@ -368,9 +368,7 @@ async function rhTokenConstructorArgs(address: string) {
   try {
     const client = createPublicClient({
       transport: http(
-        process.env.VITE_RH_RPC ||
-          process.env.QUICKNODE_HTTPS ||
-          "https://rpc.mainnet.chain.robinhood.com",
+        "https://rpc.mainnet.chain.robinhood.com",
       ),
     });
     const token = address as `0x${string}`;

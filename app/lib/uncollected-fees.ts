@@ -236,6 +236,10 @@ export async function readRhFeeEstimate(
     const protocolPair = totalBps === 0 ? potPair : (potPair * BigInt(proto)) / BigInt(totalBps);
     const creatorPair = feeTo === 1 ? 0n : potPair - protocolPair;
     const decimals = isNativeEth(pairAsset) ? 18 : mark.decimals;
+    const markUsd = mark.usd > 0 ? mark.usd : 0;
+    const potUsd = usdOf(potPair, decimals, markUsd);
+    // Growth reads on a new pad can look like TVL. Drop those.
+    const growthOk = potUsd > 0 && potUsd <= 5_000;
 
     return {
       token,
@@ -244,8 +248,10 @@ export async function readRhFeeEstimate(
       potPair,
       protocolPair,
       creatorPair,
-      protocolUsd: usdOf(protocolPair, decimals, mark.usd),
-      creatorUsd: usdOf(creatorPair + claimable, decimals, mark.usd),
+      protocolUsd: growthOk ? usdOf(protocolPair, decimals, markUsd) : 0,
+      creatorUsd:
+        (growthOk ? usdOf(creatorPair, decimals, markUsd) : 0) +
+        usdOf(claimable, decimals, markUsd),
       feeTo,
       claimablePair: claimable,
     };

@@ -14,6 +14,7 @@ import {
   rhLaunchFactoryAbi,
   writeLaunchListCache,
 } from "./factory";
+import { fetchRhTape } from "./launch-tape";
 import { getPublicClient, protocolOf } from "./networks";
 import { readLiveUsdPrices } from "./pool-price";
 import {
@@ -31,14 +32,24 @@ const PRICE_POLL_MS = 12_000;
 const TAPE_POLL_MS = 8_000;
 const KEEP_LOCAL_MS = 10 * 60_000;
 
-export function useLaunches() {
+export function useLaunches(seed: Token[] = []) {
   const [networkId, setNetworkIdState] = useState(getNetworkId);
-  const [tokens, setTokens] = useState<Token[]>(() => readLaunchListCache());
-  const [loading, setLoading] = useState(() => readLaunchListCache().length === 0);
+  const [tokens, setTokens] = useState<Token[]>(() =>
+    seed.length > 0 ? seed : readLaunchListCache(),
+  );
+  const [loading, setLoading] = useState(
+    () => seed.length === 0 && readLaunchListCache().length === 0,
+  );
   const [error, setError] = useState<string | null>(null);
   const tokensRef = useRef<Token[]>([]);
   const refreshGen = useRef(0);
   tokensRef.current = tokens;
+
+  useEffect(() => {
+    if (seed.length === 0) return;
+    for (const row of seed) rememberLaunch(row);
+    writeLaunchListCache(seed);
+  }, [seed]);
 
   useEffect(() => {
     const sync = () => {
@@ -81,7 +92,7 @@ export function useLaunches() {
     try {
       const rows =
         getNetworkId() === "robinhood"
-          ? await readCurrentRhLaunches()
+          ? ((await fetchRhTape()) ?? (await readCurrentRhLaunches()))
           : ((await fetchApiJson<Token[]>("/launches")) ?? []);
       if (gen !== refreshGen.current) return;
       if (rows.length === 0 && tokensRef.current.length > 0) {

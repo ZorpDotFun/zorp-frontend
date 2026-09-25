@@ -224,6 +224,7 @@ html[data-theme="light"] .site-bg {
 .page-wash {
   --nav-stack: 6rem;
   position: relative;
+  overflow-x: hidden;
   margin-top: calc(-1 * var(--nav-stack));
   padding-top: var(--nav-stack);
 }

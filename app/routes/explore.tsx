@@ -1,5 +1,6 @@
 import type { Route } from "./+types/explore";
 import { ExploreSection } from "../components/explore-section";
+import { readCachedRhTape } from "../lib/launch-tape.server";
 import { useLaunches } from "../lib/use-launches";
 
 export function meta({}: Route.MetaArgs) {
@@ -12,8 +13,16 @@ export function meta({}: Route.MetaArgs) {
   ];
 }
 
-export default function ExplorePage() {
-  const launches = useLaunches();
+export async function loader() {
+  try {
+    return { tokens: await readCachedRhTape() };
+  } catch {
+    return { tokens: [] };
+  }
+}
+
+export default function ExplorePage({ loaderData }: Route.ComponentProps) {
+  const launches = useLaunches(loaderData.tokens);
 
   return (
     <main className="pt-8 sm:pt-10">

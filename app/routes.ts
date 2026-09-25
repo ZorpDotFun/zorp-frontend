@@ -13,5 +13,6 @@ export default [
   route("api/verify", "routes/api.verify.ts"),
   route("api/rh-rpc", "routes/api.rh-rpc.ts"),
   route("api/launches", "routes/api.launches.ts"),
+  route("api/market", "routes/api.market.ts"),
   route("api/quote-tokens", "routes/api.quote-tokens.ts"),
 ] satisfies RouteConfig;

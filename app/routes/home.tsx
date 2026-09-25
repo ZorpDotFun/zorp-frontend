@@ -1,5 +1,6 @@
 import type { Route } from "./+types/home";
 import { HomePage } from "../home/home-page";
+import { readCachedRhTape } from "../lib/launch-tape.server";
 import { socialImageMeta, siteOrigin } from "../lib/site-meta";
 
 const SITE_TITLE = "Zorp : Launch tokens paired with anything";
@@ -19,6 +20,14 @@ export function meta({}: Route.MetaArgs) {
   ];
 }
 
-export default function Home() {
-  return <HomePage />;
+export async function loader() {
+  try {
+    return { tokens: await readCachedRhTape() };
+  } catch {
+    return { tokens: [] };
+  }
+}
+
+export default function Home({ loaderData }: Route.ComponentProps) {
+  return <HomePage seed={loaderData.tokens} />;
 }

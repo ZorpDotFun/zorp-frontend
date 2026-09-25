@@ -1,6 +1,7 @@
 import { erc20Abi, formatUnits, isAddress, parseAbiItem, type Address } from "viem";
 import { TOTAL_SUPPLY } from "./addresses";
 import { getPublicClient, resolveRhLaunchFactory } from "./factory";
+import type { NetworkId } from "./active-network";
 import { getNetwork, protocolOf } from "./networks";
 import { launchPoolIdForToken, pairMark, usdPerTokenFromSqrt } from "./pool-price";
 import { collectContractLogs, marketWindow } from "./rpc-logs";
@@ -57,8 +58,16 @@ export async function fetchRecentTrades(
   token: Address,
   tokenIsCurrency0: boolean,
   lookback?: bigint,
-  meta?: { poolId?: string; pairAsset?: string },
+  meta?: { poolId?: string; pairAsset?: string; creator?: string },
 ): Promise<MarketTrade[]> {
+  const indexed = await fetchMarketIndex<MarketTrade[]>("trades", token, {
+    tokenIsCurrency0,
+    poolId: meta?.poolId,
+    pairAsset: meta?.pairAsset,
+    creator: meta?.creator,
+  });
+  if (indexed && indexed.length > 0) return indexed;
+
   const [resolved, creatorBuy, mark] = await Promise.all([
     resolveLaunch(token, meta),
     fetchCreatorBuy(token),
@@ -294,6 +303,9 @@ export async function fetchHolders(
   creator?: string,
   extra: string[] = [],
 ): Promise<MarketHolder[]> {
+  const indexed = await fetchMarketIndex<MarketHolder[]>("holders", token, { creator });
+  if (indexed && indexed.length > 0) return indexed;
+
   const protocol = protocolOf();
   const seen = new Set<string>([
     protocol.v4PoolManager.toLowerCase(),
@@ -375,8 +387,8 @@ async function readBalances(token: Address, addresses: Address[]) {
   }
 }
 
-function holderLabel(address: string, creator?: string) {
-  const protocol = protocolOf();
+export function holderLabel(address: string, creator?: string, networkId?: NetworkId) {
+  const protocol = protocolOf(networkId);
   const value = address.toLowerCase();
   if (value === protocol.v4PoolManager.toLowerCase()) return "Pool";
   if (value === protocol.locker.toLowerCase()) return "Locked LP";
@@ -467,4 +479,35 @@ async function blockTimes(blocks: bigint[]) {
 
 function abs(value: bigint) {
   return value < 0n ? -value : value;
+}
+
+async function fetchMarketIndex<T>(
+  kind: "trades" | "holders",
+  token: Address,
+  extra: {
+    creator?: string;
+    poolId?: string;
+    pairAsset?: string;
+    tokenIsCurrency0?: boolean;
+  } = {},
+): Promise<T | null> {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams({
+    kind,
+    token,
+    chainId: String(getNetwork().chainId),
+  });
+  if (extra.creator) params.set("creator", extra.creator);
+  if (extra.poolId) params.set("poolId", extra.poolId);
+  if (extra.pairAsset) params.set("pairAsset", extra.pairAsset);
+  if (extra.tokenIsCurrency0) params.set("tokenIsCurrency0", "1");
+  try {
+    const response = await fetch(`/api/market?${params}`);
+    if (!response.ok) return null;
+    const body = (await response.json()) as T | { error?: string };
+    if (body && typeof body === "object" && "error" in body) return null;
+    return Array.isArray(body) ? (body as T) : null;
+  } catch {
+    return null;
+  }
 }
