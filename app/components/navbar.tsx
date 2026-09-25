@@ -8,8 +8,8 @@ import { useTheme } from "../lib/theme";
 
 const NAV_LINKS = [
   { to: "/", label: "Home", end: true },
-  { to: "/explore", label: "Explore" },
-  { to: "/create", label: "Create" },
+  { to: "/discover", label: "Discover" },
+  { to: "/launch", label: "Launch" },
   { to: "/docs", label: "Docs" },
   { to: "/analytics", label: "Analytics" },
 ] as const;

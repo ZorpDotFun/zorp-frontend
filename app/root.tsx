@@ -77,7 +77,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const hideFooter = useLocation().pathname === "/create";
+  const hideFooter = useLocation().pathname === "/launch";
   return (
     <ThemeProvider>
       <AppPrivyProvider>

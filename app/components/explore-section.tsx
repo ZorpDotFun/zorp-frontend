@@ -122,7 +122,7 @@ export function ExploreSection({
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="font-display text-[26px] text-ink sm:text-[32px]">
-              Explore
+              Discover
             </h1>
             <span className="text-[12px] text-muted">
               {filtered.length.toLocaleString()} launched
@@ -180,11 +180,11 @@ export function ExploreSection({
             ) : null}
           </div>
           <Link
-            to="/create"
+            to="/launch"
             className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-yellowell px-4 text-[13px] font-bold text-black transition hover:brightness-110"
           >
             <PlusIcon />
-            Create
+            Launch
           </Link>
         </div>
       </div>
@@ -271,8 +271,8 @@ export function ExploreSection({
           {launched.length === 0 ? (
             <>
               No tokens yet.{" "}
-              <Link to="/create" className="font-medium text-yellowell">
-                Create the first launch.
+              <Link to="/launch" className="font-medium text-yellowell">
+                Launch the first token.
               </Link>
             </>
           ) : (

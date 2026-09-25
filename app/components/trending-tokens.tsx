@@ -43,11 +43,11 @@ export function TrendingTokens({
               Live
             </p>
             <h2 className="mt-1 font-display text-[22px] leading-snug font-semibold text-ink sm:text-[26px]">
-              Explore tokens
+              Discover tokens
             </h2>
           </div>
           <Link
-            to="/explore"
+            to="/discover"
             className="text-[13px] font-extrabold text-muted transition hover:text-yellowell"
           >
             All launches →
@@ -65,7 +65,7 @@ export function TrendingTokens({
         ) : trending.length === 0 ? (
           <p className="rounded-3xl bg-surface px-5 py-12 text-center text-[14px] font-medium text-muted ring-1 ring-line">
             No launches yet.{" "}
-            <Link to="/create" className="text-yellowell">
+            <Link to="/launch" className="text-yellowell">
               Be first.
             </Link>
           </p>
@@ -83,10 +83,10 @@ export function TrendingTokens({
             </div>
             <div className="mt-8 flex justify-center">
               <Link
-                to="/explore"
+                to="/discover"
                 className="inline-flex h-12 items-center rounded-full bg-yellowell px-7 text-[15px] font-extrabold text-black transition hover:brightness-110"
               >
-                Explore all
+                Discover all
               </Link>
             </div>
           </>

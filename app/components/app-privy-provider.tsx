@@ -2,7 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
-  useLayoutEffect,
+  useEffect,
   useState,
   type ComponentType,
   type ReactNode,
@@ -15,7 +15,7 @@ export function usePrivyReady() {
 }
 
 function MarkReady({ onReady }: { onReady: () => void }) {
-  useLayoutEffect(() => {
+  useEffect(() => {
     onReady();
   }, [onReady]);
   return null;
@@ -23,24 +23,54 @@ function MarkReady({ onReady }: { onReady: () => void }) {
 
 type PrivyRootProps = { children: ReactNode };
 
+let privyRootLoad: Promise<ComponentType<PrivyRootProps>> | null = null;
+
+export function loadPrivyRoot() {
+  privyRootLoad ??= import("./privy-root")
+    .then((mod) => mod.default)
+    .catch((error) => {
+      privyRootLoad = null;
+      throw error;
+    });
+  return privyRootLoad;
+}
+
 export function AppPrivyProvider({ children }: { children: ReactNode }) {
   const appId = import.meta.env.VITE_PRIVY_APP_ID;
   const [Root, setRoot] = useState<ComponentType<PrivyRootProps> | null>(null);
   const [ready, setReady] = useState(false);
   const onReady = useCallback(() => setReady(true), []);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!appId) return;
     let cancelled = false;
-    void import("./privy-root")
-      .then((mod) => {
-        if (!cancelled) setRoot(() => mod.default);
-      })
-      .catch(() => {
-        if (!cancelled) setRoot(() => ({ children: inner }: PrivyRootProps) => inner);
-      });
+    let attempt = 0;
+    let timer = 0;
+
+    function mount() {
+      void loadPrivyRoot()
+        .then((Loaded) => {
+          if (!cancelled) setRoot(() => Loaded);
+        })
+        .catch(() => {
+          attempt += 1;
+          if (cancelled) return;
+          timer = window.setTimeout(mount, Math.min(2000, 300 * attempt));
+        });
+    }
+
+    function onWake() {
+      if (!cancelled) mount();
+    }
+
+    mount();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
     };
   }, [appId]);
 

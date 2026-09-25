@@ -1,8 +1,13 @@
 import { Link, NavLink } from "react-router";
-import { XIcon } from "./social-icons";
+import { TelegramIcon, XIcon } from "./social-icons";
 import { ZorpMark } from "./zorp-mark";
 
 const SOCIALS = [
+  {
+    label: "Telegram",
+    href: "https://t.me/zorpdotfun",
+    icon: TelegramIcon,
+  },
   {
     label: "X",
     href: "https://x.com/zorpdotfun",
@@ -39,24 +44,24 @@ export function Footer() {
             Home
           </NavLink>
           <NavLink
-            to="/explore"
+            to="/discover"
             className={({ isActive }) =>
               `text-[13px] font-medium transition ${
                 isActive ? "text-ink" : "text-muted hover:text-ink"
               }`
             }
           >
-            Explore
+            Discover
           </NavLink>
           <NavLink
-            to="/create"
+            to="/launch"
             className={({ isActive }) =>
               `text-[13px] font-medium transition ${
                 isActive ? "text-ink" : "text-muted hover:text-ink"
               }`
             }
           >
-            Create
+            Launch
           </NavLink>
           <NavLink
             to="/docs"

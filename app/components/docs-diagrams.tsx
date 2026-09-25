@@ -306,7 +306,7 @@ export function TradeCircuit() {
         />
       </div>
       <p className="page-lede mt-4 text-[13px]">
-        Same route on both sides — trader, router, then the official v4 pool.
+        Same route on both sides: trader, router, then the official v4 pool.
       </p>
       <div className="mt-5 flex flex-wrap items-center gap-x-8 gap-y-2 border-t border-line pt-4">
         <p className="page-lede text-[13px]">
@@ -314,7 +314,7 @@ export function TradeCircuit() {
           Protocol
         </p>
         <p className="page-lede text-[13px]">
-          <span className="page-title mr-2 text-[15px] text-ink">0–10%</span>
+          <span className="page-title mr-2 text-[15px] text-ink">0-10%</span>
           Creator
         </p>
         <p className="page-lede text-[13px]">
@@ -588,7 +588,7 @@ export function FeeSplit() {
             kicker="Creator"
             title="You or holders"
             hint="Set at launch and frozen. Claim on Zorp, or push to holders at $50."
-            value="0–10%"
+            value="0-10%"
           />
         </div>
       </div>

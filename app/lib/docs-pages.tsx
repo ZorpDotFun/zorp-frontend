@@ -76,7 +76,7 @@ function Liquidity() {
     <>
       <Lead>
         A pair is allowed when its official Uniswap book versus ETH, WETH, or
-        USDG is real — v2, v3, or v4. After launch the new TOKEN / PAIR pool
+        USDG is real: v2, v3, or v4. After launch the new TOKEN / PAIR pool
         lives on its own.
       </Lead>
       <LiquidityCircuit />
@@ -129,15 +129,15 @@ function Fees() {
     <>
       <Lead>
         No token tax. Protocol is a fixed 1% and pays the treasury when fees
-        are collected. Creator picks 0–10% and claims on Zorp. Holder mode
+        are collected. Creator picks 0-10% and claims on Zorp. Holder mode
         pushes the pair cut to whoever is holding once the pot hits $50.
       </Lead>
       <FeeSplit />
       <Rules
         items={[
           { label: "Protocol", value: "1% · paid to treasury on collect" },
-          { label: "Creator", value: "0–10% · Claim on Zorp collects and pays" },
-          { label: "Holders", value: "Same 0–10% · pushed to current holders at $50" },
+          { label: "Creator", value: "0-10% · Claim on Zorp collects and pays" },
+          { label: "Holders", value: "Same 0-10% · pushed to current holders at $50" },
           { label: "Uniswap", value: "Official book · no extra Zorp tax" },
         ]}
       />
@@ -188,18 +188,18 @@ function Contracts() {
   const hook = NETWORKS.robinhood.protocol.hook;
   const live = NETWORKS.robinhood.protocol.deployed;
   const rows: [string, string, boolean][] = [
-    ["RhLaunchFactory", live ? factory : "—", live],
+    ["RhLaunchFactory", live ? factory : "-", live],
     [
       "RhLocker",
       live && locker !== "0x0000000000000000000000000000000000000000"
         ? locker
-        : "—",
+        : "-",
       live && locker !== "0x0000000000000000000000000000000000000000",
     ],
-    ["RhHook", live ? hook : "—", live],
-    ["RhFeeVault", live ? RH_FEE_VAULT : "—", live],
-    ["LiquidityGate", live ? RH_LIQUIDITY_GATE : "—", live],
-    ["RhEthFiller", live ? RH_ETH_FILLER : "—", live],
+    ["RhHook", live ? hook : "-", live],
+    ["RhFeeVault", live ? RH_FEE_VAULT : "-", live],
+    ["LiquidityGate", live ? RH_LIQUIDITY_GATE : "-", live],
+    ["RhEthFiller", live ? RH_ETH_FILLER : "-", live],
     ["ETH", "Native (address zero)", true],
     ["WETH", RH_WETH, true],
     ["v4 PoolManager", "0x8366a39CC670B4001A1121B8F6A443A643e40951", true],

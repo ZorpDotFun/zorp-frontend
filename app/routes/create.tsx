@@ -44,7 +44,7 @@ import {
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Create on Zorp" },
+    { title: "Launch on Zorp" },
     {
       name: "description",
       content:
@@ -240,7 +240,7 @@ export default function CreatePage() {
           ← Back to homepage
         </Link>
         <p className="mt-5 text-[13px] font-bold tracking-[0.16em] text-muted uppercase">
-          /create
+          /launch
         </p>
         <h1 className="mt-3 font-display text-[28px] leading-snug font-semibold text-ink sm:text-[36px]">
           Launch token

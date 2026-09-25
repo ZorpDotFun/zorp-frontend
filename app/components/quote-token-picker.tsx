@@ -163,7 +163,7 @@ function QuoteCard({
           src={token.logoUrl}
           alt=""
           referrerPolicy="no-referrer"
-          className="size-7 shrink-0 rounded-full object-cover"
+          className="size-7 shrink-0 rounded-full bg-white object-contain p-0.5"
           onError={() => setBroken(true)}
         />
       ) : (

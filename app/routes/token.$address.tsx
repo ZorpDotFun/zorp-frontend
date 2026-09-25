@@ -179,7 +179,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
   return (
     <main className="mx-auto max-w-[1280px] px-4 pb-20 pt-5 sm:px-6 lg:px-8">
       <nav className="flex items-center gap-2 text-[13px] text-muted">
-        <Link to="/explore" className="hover:text-ink">
+        <Link to="/discover" className="hover:text-ink">
           Coin
         </Link>
         <span className="text-muted/50">›</span>

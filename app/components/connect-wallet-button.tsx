@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   useConnectWallet,
   useLinkAccount,
@@ -27,9 +27,15 @@ export function ConnectWalletButton({
   const { linkWallet } = useLinkAccount();
   const { wallets } = useWallets();
   const address = wallets[0]?.address;
+  const [openWhenReady, setOpenWhenReady] = useState(autoOpen);
 
   useEffect(() => {
-    if (!autoOpen || !ready || (authenticated && address)) return;
+    if (autoOpen) setOpenWhenReady(true);
+  }, [autoOpen]);
+
+  useEffect(() => {
+    if (!openWhenReady || !ready || (authenticated && address)) return;
+    setOpenWhenReady(false);
     openWalletAuth({
       authenticated,
       hasWallet: Boolean(address),
@@ -37,7 +43,15 @@ export function ConnectWalletButton({
       connectWallet,
       linkWallet,
     });
-  }, [autoOpen, ready, authenticated, address, login, connectWallet, linkWallet]);
+  }, [
+    openWhenReady,
+    ready,
+    authenticated,
+    address,
+    login,
+    connectWallet,
+    linkWallet,
+  ]);
 
   if (authenticated && address) {
     return (
@@ -55,15 +69,19 @@ export function ConnectWalletButton({
   return (
     <button
       type="button"
-      onClick={() =>
+      onClick={() => {
+        if (!ready) {
+          setOpenWhenReady(true);
+          return;
+        }
         openWalletAuth({
           authenticated,
           hasWallet: Boolean(address),
           login,
           connectWallet,
           linkWallet,
-        })
-      }
+        });
+      }}
       className={`h-10 rounded-full bg-yellowell text-[15px] font-bold text-black transition hover:brightness-110 ${
         compact ? "px-3.5" : "px-5"
       }`}

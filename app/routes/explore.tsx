@@ -5,7 +5,7 @@ import { useLaunches } from "../lib/use-launches";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Explore : Zorp" },
+    { title: "Discover : Zorp" },
     {
       name: "description",
       content: "Browse live Zorp launches on Robinhood. Search, filter, and trade from block one.",

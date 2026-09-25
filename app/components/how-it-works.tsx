@@ -4,7 +4,7 @@ const STEPS = [
   {
     n: "01",
     title: "Pick any pair",
-    body: "Stocks, memes, ETH, USDG — if it already trades versus ETH or USDG on Uniswap, you can launch against it.",
+    body: "Stocks, memes, ETH, USDG. If it already trades versus ETH or USDG on Uniswap, you can launch against it.",
   },
   {
     n: "02",
@@ -14,7 +14,7 @@ const STEPS = [
   {
     n: "03",
     title: "Trade from block one",
-    body: "The book is live the second the launch lands. Creators take 0–10% of swap fees. Protocol takes 1%.",
+    body: "The book is live the second the launch lands. Creators take 0-10% of swap fees. Protocol takes 1%.",
   },
 ] as const;
 
@@ -52,7 +52,7 @@ export function HowItWorks() {
 
         <div className="mt-8 flex flex-wrap gap-3">
           <Link
-            to="/create"
+            to="/launch"
             className="inline-flex h-11 items-center rounded-full bg-yellowell px-5 text-[14px] font-extrabold text-black transition hover:brightness-110"
           >
             Launch yours

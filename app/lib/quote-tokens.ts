@@ -94,6 +94,11 @@ export function emptyCatalog(): QuoteCatalog {
   return { currencies: [ETH, WETH, USDG], stocks: [], uniswap: [...FIXED_UNISWAP] };
 }
 
+export function stockLogoUrl(symbol: string) {
+  const ticker = symbol.trim().toUpperCase();
+  return ticker ? `/assets/stocks/${ticker}.png` : null;
+}
+
 export function isNativeEth(address: string) {
   return address.toLowerCase() === RH_NATIVE_ETH.toLowerCase();
 }
@@ -119,7 +124,10 @@ export async function fetchQuoteCatalog(): Promise<QuoteCatalog> {
   const body = (await res.json()) as QuoteCatalog;
   return {
     currencies: withNativeEth(body.currencies),
-    stocks: body.stocks ?? [],
+    stocks: (body.stocks ?? []).map((row) => ({
+      ...row,
+      logoUrl: stockLogoUrl(row.symbol) || row.logoUrl,
+    })),
     uniswap: mergeFixedUniswap(body.uniswap ?? []),
   };
 }

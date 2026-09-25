@@ -7,6 +7,7 @@ import {
   WETH,
   emptyCatalog,
   mergeFixedUniswap,
+  stockLogoUrl,
   type QuoteCatalog,
   type QuoteToken,
 } from "../lib/quote-tokens";
@@ -23,7 +24,7 @@ const UNI_DEXES = [
 ] as const;
 const GECKO_PAGES = 4;
 const HEADERS = { Accept: "application/json", "User-Agent": "zorp-quote-tokens/1" };
-const CATALOG_VER = 5;
+const CATALOG_VER = 6;
 
 type RhAsset = {
   tokenSymbol?: string;
@@ -85,7 +86,7 @@ async function buildCatalog(): Promise<QuoteCatalog> {
       address,
       symbol: (asset.tokenSymbol || "TOKEN").toUpperCase(),
       name: cleanName(asset.tokenName || asset.tokenSymbol || "Stock Token"),
-      logoUrl: asset.logoUrl || null,
+      logoUrl: stockLogoUrl(asset.tokenSymbol || "") || asset.logoUrl || null,
       section: "stocks",
       liquidityUsd: 0,
     });

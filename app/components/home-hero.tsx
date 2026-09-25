@@ -15,11 +15,11 @@ export function HomeHero() {
           Uniswap v4. Tradable from the first block.
         </p>
         <div className="home-hero__links">
-          <Link to="/create" className="home-hero__cta">
-            Create a token
+          <Link to="/launch" className="home-hero__cta">
+            Launch a token
           </Link>
-          <Link to="/explore" className="home-hero__cta">
-            Explore tokens
+          <Link to="/discover" className="home-hero__cta">
+            Discover tokens
           </Link>
         </div>
       </div>

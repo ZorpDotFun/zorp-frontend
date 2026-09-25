@@ -1,19 +1,38 @@
-import { useEffect, useRef, useState, type ComponentType } from "react";
-import { usePrivyReady } from "./app-privy-provider";
+import { useEffect, useState, type ComponentType } from "react";
+import { loadPrivyRoot, usePrivyReady } from "./app-privy-provider";
 
 type WalletButton = ComponentType<{ compact?: boolean; autoOpen?: boolean }>;
+
+const buttonClass = (compact: boolean) =>
+  `h-10 rounded-full bg-yellowell text-[15px] font-bold text-black transition hover:brightness-110 ${
+    compact ? "px-3.5" : "px-5"
+  }`;
+
+let buttonLoad: Promise<WalletButton> | null = null;
+
+function loadWalletButton() {
+  buttonLoad ??= import("./connect-wallet-button")
+    .then((mod) => mod.ConnectWalletButton)
+    .catch((error) => {
+      buttonLoad = null;
+      throw error;
+    });
+  return buttonLoad;
+}
 
 export function ConnectWallet({ compact = false }: { compact?: boolean }) {
   const privyReady = usePrivyReady();
   const [Button, setButton] = useState<WalletButton | null>(null);
-  const queued = useRef(false);
+  const [queued, setQueued] = useState(false);
 
   useEffect(() => {
     if (!privyReady) return;
     let cancelled = false;
-    void import("./connect-wallet-button").then((mod) => {
-      if (!cancelled) setButton(() => mod.ConnectWalletButton);
-    });
+    void loadWalletButton()
+      .then((Loaded) => {
+        if (!cancelled) setButton(() => Loaded);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -24,16 +43,15 @@ export function ConnectWallet({ compact = false }: { compact?: boolean }) {
       <button
         type="button"
         onClick={() => {
-          queued.current = true;
+          setQueued(true);
+          void loadPrivyRoot();
         }}
-        className={`h-9 rounded-full bg-yellowell text-[13px] font-bold text-black transition hover:brightness-110 ${
-          compact ? "px-3" : "px-4"
-        }`}
+        className={buttonClass(compact)}
       >
         {compact ? "Connect" : "Connect wallet"}
       </button>
     );
   }
 
-  return <Button compact={compact} autoOpen={queued.current} />;
+  return <Button compact={compact} autoOpen={queued} />;
 }

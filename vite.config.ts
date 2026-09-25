@@ -28,6 +28,9 @@ export default defineConfig(({ mode }) => {
       "import.meta.env.VITE_PRIVY_APP_ID": JSON.stringify(privyAppId),
       "import.meta.env.VITE_PRIVY_CLIENT_ID": JSON.stringify(privyClientId),
     },
+    optimizeDeps: {
+      include: ["@privy-io/react-auth", "viem"],
+    },
     server: {
       proxy: {
         "/zorp-api": {
