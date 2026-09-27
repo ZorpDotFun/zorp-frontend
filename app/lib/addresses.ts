@@ -52,6 +52,8 @@ export const RH_ETH_FILLER = addr(
 export const RH_REVENUE_TREASURY = addr(
   import.meta.env.VITE_RH_REVENUE_TREASURY || "0xf13be4DB32D226d57cdCa9239f382B76bB5F0e6D",
 );
+/** Official ZORP token on Robinhood 4663. */
+export const RH_ZORP = addr("0xEe28144F417181fCdc7283bf48eD0fb68944F332");
 
 /** Earlier RH pads. Create always uses `RH_LAUNCH_FACTORY`; reads still find these. */
 export const RH_PREVIOUS_FACTORIES = [

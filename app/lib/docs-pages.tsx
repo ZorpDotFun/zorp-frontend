@@ -10,7 +10,7 @@ import {
   TradeCircuit,
 } from "../components/docs-diagrams";
 import { ROBINHOOD_CHAIN_ID, ROBINHOOD_EXPLORER } from "./chains";
-import { RH_ETH_FILLER, RH_FEE_VAULT, RH_LIQUIDITY_GATE } from "./addresses";
+import { RH_ETH_FILLER, RH_FEE_VAULT, RH_LIQUIDITY_GATE, RH_ZORP } from "./addresses";
 import { NETWORKS, RH_WETH } from "./networks";
 
 const RH_V2_FACTORY = "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f";
@@ -195,6 +195,7 @@ function Contracts() {
   const hook = NETWORKS.robinhood.protocol.hook;
   const live = NETWORKS.robinhood.protocol.deployed;
   const rows: [string, string, boolean][] = [
+    ["ZORP", RH_ZORP, true],
     ["RhLaunchFactory", live ? factory : "-", live],
     [
       "RhLocker",
@@ -283,6 +284,18 @@ function Support() {
             value: (
               <a href="https://zorpdotfun.com" target="_blank" rel="noreferrer">
                 zorpdotfun.com
+              </a>
+            ),
+          },
+          {
+            label: "ZORP CA",
+            value: (
+              <a
+                href={`${ROBINHOOD_EXPLORER}/address/${RH_ZORP}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {RH_ZORP}
               </a>
             ),
           },

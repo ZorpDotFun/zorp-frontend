@@ -1,5 +1,6 @@
 import { Link, NavLink } from "react-router";
 import { TelegramIcon, XIcon } from "./social-icons";
+import { ZorpCa } from "./zorp-ca";
 import { ZorpMark } from "./zorp-mark";
 
 const SOCIALS = [
@@ -26,9 +27,13 @@ export function Footer() {
               ZORP
             </span>
           </Link>
-          <p className="text-[13px] text-muted">
-            Launch coins on Robinhood via zorpdotfun.com
-          </p>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <p className="text-[13px] text-muted">
+              Launch coins on Robinhood via zorpdotfun.com
+            </p>
+            <ZorpCa compact className="sm:hidden" />
+            <ZorpCa className="hidden sm:inline-flex" />
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

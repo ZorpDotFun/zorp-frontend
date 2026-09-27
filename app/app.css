@@ -209,6 +209,10 @@ html[data-theme="light"] .site-bg {
   color: #7bec1e;
 }
 
+.home-hero__ca {
+  margin-top: 1.25rem;
+}
+
 @keyframes home-hero-drift {
   0% {
     transform: translate3d(0, 0, 0);

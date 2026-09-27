@@ -50,6 +50,7 @@ Zorp (`rh-contracts/script/Deploy.s.sol`, 24 Sep 2026). Vault `collect` moves to
 - LiquidityGate: `0x6eA8Ec83D04409bEDa11c4F9D9631E5670BD2929`
 - RhEthFiller: `0xdC814d88B18912bE11cD5Ed38EcB3Bc959397308`
 - RhRevenueTreasury: `0xf13be4DB32D226d57cdCa9239f382B76bB5F0e6D`
+- ZORP: `0xEe28144F417181fCdc7283bf48eD0fb68944F332`
 
 Sourcify 4663. Official explorer verify is Blockscout (`--verifier blockscout --verifier-url https://robinhoodchain.blockscout.com/api/`). Re-run `rh-contracts/script/verify-rh.sh`. New launches POST `/api/verify` (Sourcify + Blockscout).
 

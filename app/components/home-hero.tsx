@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { ZorpCa } from "./zorp-ca";
 
 export function HomeHero() {
   return (
@@ -22,6 +23,7 @@ export function HomeHero() {
             Discover tokens
           </Link>
         </div>
+        <ZorpCa compact className="home-hero__ca justify-center" />
       </div>
     </section>
   );
