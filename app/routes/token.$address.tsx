@@ -78,14 +78,43 @@ export default function TokenPage({ params }: Route.ComponentProps) {
     async function load(row: Token) {
       const address = row.address as Address;
       const poolId = launchPoolIdForToken(row);
-      const [live, dex, prints] = await Promise.all([
-        readLiveUsdPrice(address, row.tokenIsCurrency0, row),
-        fetchDexscreenerPoints(address, poolId),
-        fetchSwapPrints(address, row.tokenIsCurrency0, poolId, row.pairAsset),
-      ]);
+      const live = await readLiveUsdPrice(address, row.tokenIsCurrency0, row);
+      if (cancelled) return;
+
+      const liveUsd = live && live > 0 ? live : 0;
+      if (liveUsd > 0) {
+        const nextFdv = liveUsd * TOTAL_SUPPLY;
+        noteMarketCap(row.address, nextFdv, nextFdv);
+        setPriceUsd(liveUsd);
+        setFdv(nextFdv);
+        setPoints((current) =>
+          mergePoints([
+            { time: row.launchedAt / 1000, value: openingPriceUsd() },
+            ...current,
+            { time: Date.now() / 1000, value: liveUsd },
+          ]),
+        );
+      }
+
+      let dex: Awaited<ReturnType<typeof fetchDexscreenerPoints>> = {
+        priceUsd: null,
+        fdv: null,
+        priceChange: null,
+        points: [],
+      };
+      let prints: Awaited<ReturnType<typeof fetchSwapPrints>> = [];
+      try {
+        [dex, prints] = await Promise.all([
+          fetchDexscreenerPoints(address, poolId),
+          fetchSwapPrints(address, row.tokenIsCurrency0, poolId, row.pairAsset),
+        ]);
+      } catch {
+        if (liveUsd > 0) return;
+      }
       if (cancelled) return;
 
       const latest = preferOfficialUsd(live, dex.priceUsd, row.price);
+      if (!(latest > 0)) return;
       const nextFdv = latest * TOTAL_SUPPLY;
       const printPeak =
         prints.reduce((best, point) => Math.max(best, point.value), 0) *
@@ -99,11 +128,11 @@ export default function TokenPage({ params }: Route.ComponentProps) {
       const merged = mergePoints([
         { time: row.launchedAt / 1000, value: openingPriceUsd() },
         ...prints,
-        latest > 0 ? { time: now, value: latest } : null,
+        { time: now, value: latest },
       ]);
 
       setPriceUsd(latest);
-      setFdv(latest > 0 ? nextFdv : TARGET_FDV_USD);
+      setFdv(nextFdv);
       setPoints(merged);
     }
 
@@ -121,11 +150,10 @@ export default function TokenPage({ params }: Route.ComponentProps) {
             : [{ time: row.launchedAt / 1000, value: openingPriceUsd() }],
         );
         document.title = `${row.name} ($${row.ticker}) : Zorp`;
-        return load(row).then(() => {
-          timer = window.setInterval(() => {
-            void load(row);
-          }, 12_000);
-        });
+        void load(row);
+        timer = window.setInterval(() => {
+          void load(row);
+        }, 12_000);
       })
       .catch((cause) => {
         if (cancelled) return;

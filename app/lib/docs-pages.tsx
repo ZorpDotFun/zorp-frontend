@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import {
   Architecture,
   FeeSplit,
@@ -52,9 +53,15 @@ function Overview() {
   return (
     <>
       <Lead>
-        Launch any coin against a live Robinhood token. No curve. No migrate.
-        The factory opens a locked Uniswap v4 book at $3,000 FDV. An optional
-        first buy fills in that same transaction.
+        Launch coins and pair them with any meme, stock, or custom token at{" "}
+        <Link to="/launch" className="font-medium text-ink underline underline-offset-2">
+          zorpdotfun.com/launch
+        </Link>
+        . Launch coins paired with any other token.
+      </Lead>
+      <Lead>
+        No curve. No migrate. The factory opens a locked Uniswap v4 book at
+        $3,000 FDV. An optional first buy fills in that same transaction.
       </Lead>
       <Architecture />
       <Rules

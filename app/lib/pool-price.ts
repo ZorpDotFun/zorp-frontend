@@ -94,6 +94,12 @@ export async function pairMark(pairAsset?: string): Promise<PairMark> {
   const hit = markCache.get(pair);
   if (hit && Date.now() - hit.at < 30_000) return hit;
 
+  if (pair === RH_USDG.toLowerCase()) {
+    const mark = { decimals: 6, usd: 1 };
+    markCache.set(pair, { ...mark, at: Date.now() });
+    return mark;
+  }
+
   if (getNetwork().id !== "robinhood") {
     const mark = defaultMark();
     markCache.set(pair, { ...mark, at: Date.now() });
@@ -117,12 +123,6 @@ export async function pairMark(pairAsset?: string): Promise<PairMark> {
 
     if (isNativeEth(pair) || pair === protocol.pairAsset.toLowerCase()) {
       const mark = { decimals: 18, usd: ethUsd > 0 ? ethUsd : 3_000 };
-      markCache.set(pair, { ...mark, at: Date.now() });
-      return mark;
-    }
-
-    if (pair === RH_USDG.toLowerCase()) {
-      const mark = { decimals: 6, usd: 1 };
       markCache.set(pair, { ...mark, at: Date.now() });
       return mark;
     }
@@ -236,9 +236,16 @@ export function usdPerTokenFromSqrt(
   mark: PairMark = defaultMark(),
 ) {
   if (sqrtPriceX96 === 0n || !(mark.usd > 0)) return 0;
-  const wei = quoteWeiFromSqrt(sqrtPriceX96, tokenIsCurrency0);
-  if (wei === 0n) return 0;
-  const quote = Number(wei) / 10 ** mark.decimals;
+  // Keep 18 extra decimals. USDG @ $3k FDV is only 3 raw units / token, so
+  // integer pair-wei truncates every buy until FDV jumps a full $1,000.
+  const extra = 18n;
+  const scale = 10n ** extra;
+  const pairScale = 10n ** BigInt(mark.decimals);
+  const priceX192 = sqrtPriceX96 * sqrtPriceX96;
+  const priced = tokenIsCurrency0
+    ? (priceX192 * scale * TOKEN_UNIT) / ((1n << 192n) * pairScale)
+    : ((1n << 192n) * scale * TOKEN_UNIT) / (priceX192 * pairScale);
+  const quote = Number(priced) / Number(scale);
   if (!Number.isFinite(quote) || quote <= 0) return 0;
   return quote * mark.usd;
 }

@@ -2,6 +2,7 @@ import { getPublicClient } from "./networks";
 import type { Address } from "viem";
 
 const LOG_CHUNK = 2_000n;
+const WIDE_CHUNK = 2_000_000n;
 const DAY_SECONDS = 86_400;
 
 export async function marketWindow(launchedAt?: bigint) {
@@ -41,6 +42,7 @@ export async function collectContractLogs<T>({
   fromBlock: fromOverride,
   newestFirst = false,
   limit,
+  wide = false,
 }: {
   address: Address;
   event: T;
@@ -49,15 +51,33 @@ export async function collectContractLogs<T>({
   fromBlock?: bigint;
   newestFirst?: boolean;
   limit?: number;
+  /** Try the full range in one RPC call. RH accepts this when the topic set is small. */
+  wide?: boolean;
 }) {
   const latest = await getPublicClient().getBlockNumber();
   const fromBlock =
     fromOverride ?? (lookback != null && latest > lookback ? latest - lookback : 0n);
+  if (wide) {
+    try {
+      return await withRetry(() =>
+        getPublicClient().getLogs({
+          address,
+          event: event as never,
+          args: args as never,
+          fromBlock,
+          toBlock: latest,
+        }),
+      );
+    } catch {
+      /* keep the full window; page it below */
+    }
+  }
   const pages: unknown[][] = [];
+  const step = wide ? WIDE_CHUNK : LOG_CHUNK;
 
   if (newestFirst) {
-    for (let end = latest; end >= fromBlock; end -= LOG_CHUNK) {
-      const start = end + 1n - LOG_CHUNK < fromBlock ? fromBlock : end + 1n - LOG_CHUNK;
+    for (let end = latest; end >= fromBlock; end -= step) {
+      const start = end + 1n - step < fromBlock ? fromBlock : end + 1n - step;
       pages.push(await getLogsRange({ address, event, args, fromBlock: start, toBlock: end }));
       const count = pages.reduce((sum, page) => sum + page.length, 0);
       if (limit && count >= limit) break;
@@ -65,8 +85,8 @@ export async function collectContractLogs<T>({
     return pages.flat();
   }
 
-  for (let start = fromBlock; start <= latest; start += LOG_CHUNK) {
-    const end = start + LOG_CHUNK - 1n > latest ? latest : start + LOG_CHUNK - 1n;
+  for (let start = fromBlock; start <= latest; start += step) {
+    const end = start + step - 1n > latest ? latest : start + step - 1n;
     pages.push(await getLogsRange({ address, event, args, fromBlock: start, toBlock: end }));
     if (limit && pages.reduce((sum, page) => sum + page.length, 0) >= limit) break;
   }

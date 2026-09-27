@@ -53,10 +53,11 @@ export default function Analytics() {
     }
   }, []);
 
-  const volume = stats?.volumeAll ?? 0;
+  const volume = range === "24h" ? (stats?.volume24h ?? 0) : (stats?.volumeAll ?? 0);
   const launches = range === "24h" ? (stats?.launches24h ?? 0) : (stats?.launchesAll ?? 0);
-  const fees = stats?.feesAll ?? 0;
-  const claimed = stats?.creatorFeesAll ?? 0;
+  const fees = range === "24h" ? (stats?.fees24h ?? 0) : (stats?.feesAll ?? 0);
+  const claimed =
+    range === "24h" ? (stats?.creatorFees24h ?? 0) : (stats?.creatorFeesAll ?? 0);
   const rh = getNetwork().id === "robinhood";
   const factory = protocolOf().factory;
   const treasury = rh ? RH_REVENUE_TREASURY : ZORP_BUYBACK;
@@ -162,7 +163,7 @@ function AnimatedUsd({
       write(value);
       return;
     }
-    if (value <= shown.current + 0.005) return;
+    if (Math.abs(value - shown.current) <= 0.005) return;
 
     const from = shown.current;
     const to = value;

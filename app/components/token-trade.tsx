@@ -22,10 +22,8 @@ import {
   quoteEthToPair,
   quoteExactIn,
   quotePairToEth,
-  readErc20Balance,
   swapExactIn,
   swapPoolForToken,
-  unwindPairToEth,
 } from "../lib/trade";
 import { useErc20Balance, useNativeBalance } from "../lib/use-usdc-balance";
 import { usePrivyReady } from "./app-privy-provider";
@@ -544,9 +542,7 @@ function TradeSubmit({
     setError(null);
     try {
       const pair = pairAsset as Address | undefined;
-      const account = wallet.address as Address;
       let poolIn = amountIn;
-      let pairBefore = 0n;
       if (buying && useEth) {
         if (!pair || !pairFromEth || pairFromEth <= 0n) {
           throw new Error("Could not price this buy in ETH.");
@@ -559,10 +555,6 @@ function TradeSubmit({
           ethIn: amountIn,
         });
       }
-      if (!buying && useEth && pair) {
-        pairBefore = await readErc20Balance(pair, account);
-      }
-
       const tx = await swapExactIn({
         wallet,
         token: token as Address,
@@ -571,20 +563,9 @@ function TradeSubmit({
         amountIn: poolIn,
         amountOutMin: minOut(quoted),
         pool,
+        receiveEth: !buying && useEth,
+        pairDecimals,
       });
-
-      if (!buying && useEth && pair) {
-        const pairAfter = await readErc20Balance(pair, account);
-        const pairOut = pairAfter > pairBefore ? pairAfter - pairBefore : quoted;
-        if (pairOut > 0n) {
-          await unwindPairToEth({
-            wallet,
-            pair,
-            amountIn: pairOut,
-            pairDecimals,
-          });
-        }
-      }
 
       const payDecimals = buying ? (useEth ? 18 : pairDecimals) : TOKEN_DECIMALS;
       const outAmount =

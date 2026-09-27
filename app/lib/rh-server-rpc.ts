@@ -29,7 +29,19 @@ export function rhRpcTargets() {
   );
 }
 
-export function rhRpcTimeout(url: string) {
+/** Alchemy free tier only allows a 10-block eth_getLogs window. */
+export function rhLogTargets() {
+  return [PUBLIC_RH_RPC, blockscoutRhRpc()].filter(
+    (url, index, all) => Boolean(url) && all.indexOf(url) === index,
+  );
+}
+
+export function rhRpcTimeout(url: string, logs = false) {
+  if (logs) {
+    if (url === PUBLIC_RH_RPC) return 20_000;
+    if (url.includes("blockscout.com")) return 15_000;
+    return 8_000;
+  }
   if (url === PUBLIC_RH_RPC || url.includes("blockscout.com")) return 4_000;
   return 8_000;
 }

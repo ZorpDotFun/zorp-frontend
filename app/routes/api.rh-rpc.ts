@@ -1,4 +1,8 @@
-import { rhRpcTargets, rhRpcTimeout } from "../lib/rh-server-rpc";
+import { rhLogTargets, rhRpcTargets, rhRpcTimeout } from "../lib/rh-server-rpc";
+
+function isGetLogs(payload: string) {
+  return /"method"\s*:\s*"eth_getLogs"/.test(payload);
+}
 
 function logsRejected(status: number, text: string) {
   return (
@@ -43,10 +47,11 @@ async function proxy(request: Request) {
 
   const payload = await request.text();
   let last = { status: 502, text: "" };
-  const targets = rhRpcTargets();
+  const logs = isGetLogs(payload);
+  const targets = logs ? rhLogTargets() : rhRpcTargets();
   for (let i = 0; i < targets.length; i += 1) {
     const target = targets[i];
-    last = await send(target, payload, rhRpcTimeout(target));
+    last = await send(target, payload, rhRpcTimeout(target, logs));
     if (last.text && !publicFailed(last.status, last.text)) {
       return new Response(last.text, {
         status: last.status,

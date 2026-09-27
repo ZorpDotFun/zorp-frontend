@@ -22,8 +22,8 @@ import { readRhFeeEstimate } from "./uncollected-fees";
 const DAY = 86_400;
 const HOUR = 3_600;
 const HALF_HOUR = 1_800;
-const MAX_LOG_BLOCKS = 400_000n;
-const CACHE_KEY = "zorp-rh-protocol-stats-v3";
+const POOL_TOPIC_BATCH = 8;
+const CACHE_KEY = "zorp-rh-protocol-stats-v5";
 /** First RH pad went live in this window. Charts start here unless an earlier launch exists. */
 export const RH_FACTORY_LIVE = Math.floor(Date.UTC(2026, 8, 20) / 1000);
 const ZERO_POOL = `0x${"0".repeat(64)}` as Hex;
@@ -68,6 +68,7 @@ type RhSnap = {
 };
 
 let started = false;
+let refreshing = false;
 let cache: ProtocolStats | null = null;
 const listeners = new Set<(stats: ProtocolStats) => void>();
 const timers: number[] = [];
@@ -103,6 +104,8 @@ export function stopRhProtocolStats() {
 }
 
 async function refreshRhStats(first: boolean) {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const [launches, protocolFeeBps] = await Promise.all([
       readRhLaunchIndex(),
@@ -134,6 +137,12 @@ async function refreshRhStats(first: boolean) {
     emit(snap);
 
     snap.treasuryUsd = await readRhTreasuryUsd().catch(() => 0);
+    const firstBuys = await collectFirstBuyPrints(launches).catch(() => [] as Print[]);
+    if (firstBuys.length > 0) {
+      snap.swapPrints = firstBuys;
+      emit(snap);
+    }
+
     const vaults = uniqueAddresses(launches.map((row) => row.vault));
     const logs = await collectRhPrints(launches, vaults).catch(() => ({
       swaps: [] as Print[],
@@ -141,7 +150,12 @@ async function refreshRhStats(first: boolean) {
       creators: [] as Print[],
       claims: [] as Print[],
     }));
-    snap.swapPrints = logs.swaps;
+    snap.swapPrints =
+      sumSince(logs.swaps, 0) >= sumSince(firstBuys, 0) && logs.swaps.length > 0
+        ? logs.swaps
+        : firstBuys.length > 0
+          ? firstBuys
+          : logs.swaps;
     snap.feePrints = logs.fees;
     snap.creatorPrints = logs.creators;
     snap.claimPrints = logs.claims;
@@ -150,6 +164,8 @@ async function refreshRhStats(first: boolean) {
     emit(snap);
   } catch {
     if (first && !cache?.launchesAll) emitEmpty();
+  } finally {
+    refreshing = false;
   }
 }
 
@@ -219,12 +235,49 @@ async function readRhLaunchIndex(): Promise<RhLaunchRow[]> {
   return rows;
 }
 
+async function collectFirstBuyPrints(launches: RhLaunchRow[]) {
+  if (launches.length === 0) return [] as Print[];
+  const tokenByAddr = new Map(
+    launches.map((row) => [row.token.toLowerCase(), row] as const),
+  );
+  const marks = await marksFor([
+    ...launches.map((row) => row.pairAsset),
+    ETH.address,
+    RH_WETH,
+  ]);
+  const factories = rhTokenFactories(protocolOf().factory);
+  const launchedLogs = await Promise.all(
+    factories.map((factory) =>
+      collectContractLogs({
+        address: factory,
+        event: launchedEvent,
+        fromBlock: 0n,
+        wide: true,
+      }).catch(() => []),
+    ),
+  );
+  const prints: Print[] = [];
+  for (const log of launchedLogs.flat() as Array<{
+    args: { token?: Address; pairAsset?: Address; firstBuySpent?: bigint };
+  }>) {
+    const token = (log.args.token ?? "").toLowerCase();
+    const row = tokenByAddr.get(token);
+    if (!row) continue;
+    const spent = log.args.firstBuySpent ?? 0n;
+    if (spent === 0n) continue;
+    const pair = (log.args.pairAsset ?? row.pairAsset) as Address;
+    const usd = usdOf(spent, pair, marks);
+    if (!(usd > 0)) continue;
+    prints.push({ time: row.launchedAt || nowSec(), value: usd });
+  }
+  return prints;
+}
+
 async function collectRhPrints(launches: RhLaunchRow[], vaults: Address[]) {
   if (launches.length === 0) {
     return { swaps: [] as Print[], fees: [] as Print[], creators: [] as Print[], claims: [] as Print[] };
   }
   const protocol = protocolOf();
-  const fromBlock = await rhLogWindow(launches);
   const poolById = new Map(
     launches.map((row) => [row.poolId.toLowerCase(), row] as const),
   );
@@ -237,20 +290,27 @@ async function collectRhPrints(launches: RhLaunchRow[], vaults: Address[]) {
     RH_WETH,
   ]);
   const factories = rhTokenFactories(protocol.factory);
+  const poolBatches = chunk(launches.map((row) => row.poolId), POOL_TOPIC_BATCH);
 
   const [swapLogs, launchedLogs, collected, claimed] = await Promise.all([
-    collectContractLogs({
-      address: protocol.v4PoolManager,
-      event: swapEvent,
-      args: { id: launches.map((row) => row.poolId) },
-      fromBlock,
-    }).catch(() => []),
+    Promise.all(
+      poolBatches.map((ids) =>
+        collectContractLogs({
+          address: protocol.v4PoolManager,
+          event: swapEvent,
+          args: { id: ids },
+          fromBlock: 0n,
+          wide: true,
+        }).catch(() => []),
+      ),
+    ).then((pages) => pages.flat()),
     Promise.all(
       factories.map((factory) =>
         collectContractLogs({
           address: factory,
           event: launchedEvent,
-          fromBlock,
+          fromBlock: 0n,
+          wide: true,
         }).catch(() => []),
       ),
     ),
@@ -259,7 +319,8 @@ async function collectRhPrints(launches: RhLaunchRow[], vaults: Address[]) {
         collectContractLogs({
           address: vault,
           event: collectedEvent,
-          fromBlock,
+          fromBlock: 0n,
+          wide: true,
         }).catch(() => []),
       ),
     ),
@@ -268,7 +329,8 @@ async function collectRhPrints(launches: RhLaunchRow[], vaults: Address[]) {
         collectContractLogs({
           address: vault,
           event: claimedEvent,
-          fromBlock,
+          fromBlock: 0n,
+          wide: true,
         }).catch(() => []),
       ),
     ),
@@ -348,35 +410,6 @@ async function collectRhPrints(launches: RhLaunchRow[], vaults: Address[]) {
   }
 
   return { swaps, fees, creators, claims };
-}
-
-async function rhLogWindow(launches: RhLaunchRow[]) {
-  const client = getPublicClient();
-  const head = await client.getBlockNumber();
-  const earliest = launches.reduce(
-    (min, row) => (row.launchedAt > 0 && row.launchedAt < min ? row.launchedAt : min),
-    nowSec(),
-  );
-  try {
-    const sampleSpan = head > 20_000n ? 20_000n : head;
-    const [tip, sample] = await Promise.all([
-      client.getBlock({ blockNumber: head }),
-      sampleSpan > 0n
-        ? client.getBlock({ blockNumber: head - sampleSpan })
-        : Promise.resolve(null),
-    ]);
-    const sec =
-      sample && sampleSpan > 0n
-        ? Math.max((Number(tip.timestamp) - Number(sample.timestamp)) / Number(sampleSpan), 0.05)
-        : 0.1;
-    const age = Math.max(nowSec() - earliest, 600) + 180;
-    const raw = BigInt(Math.ceil(age / sec) + 2_000);
-    const blocks = raw > MAX_LOG_BLOCKS ? MAX_LOG_BLOCKS : raw;
-    return head > blocks ? head - blocks : 0n;
-  } catch {
-    const lookback = 250_000n;
-    return head > lookback ? head - lookback : 0n;
-  }
 }
 
 async function readRhTreasuryUsd() {
@@ -519,11 +552,16 @@ function assembleRh(snap: RhSnap): ProtocolStats {
 
 function mergeRh(prev: ProtocolStats | null, next: ProtocolStats): ProtocolStats {
   if (!prev) return next;
+  const volumeAll = Math.max(prev.volumeAll, next.volumeAll);
   return {
     ...next,
     launchesAll: Math.max(prev.launchesAll, next.launchesAll),
     uniqueDevs: Math.max(prev.uniqueDevs, next.uniqueDevs),
-    volumeReady: prev.volumeReady || next.volumeReady,
+    volumeAll,
+    volume24h: next.volumeReady ? next.volume24h : Math.max(prev.volume24h, next.volume24h),
+    feesAll: Math.max(prev.feesAll, next.feesAll),
+    creatorFeesAll: Math.max(prev.creatorFeesAll, next.creatorFeesAll),
+    volumeReady: prev.volumeReady || next.volumeReady || volumeAll > 0,
     volume30m:
       next.volume30m.some((bar) => bar.value > 0) || !prev.volume30m?.some((bar) => bar.value > 0)
         ? next.volume30m
@@ -541,6 +579,14 @@ function mergeRh(prev: ProtocolStats | null, next: ProtocolStats): ProtocolStats
         ? next.launch1h
         : prev.launch1h,
   };
+}
+
+function chunk<T>(rows: T[], size: number) {
+  const out: T[][] = [];
+  for (let index = 0; index < rows.length; index += size) {
+    out.push(rows.slice(index, index + size));
+  }
+  return out;
 }
 
 function fillBars(

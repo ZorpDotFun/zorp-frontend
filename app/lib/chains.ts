@@ -1,6 +1,6 @@
 import { defineChain, fallback, http } from "viem";
 import { MULTICALL3 } from "./addresses";
-import { PUBLIC_RH_RPC, rhRpcTargets, rhRpcTimeout } from "./rh-server-rpc";
+import { PUBLIC_RH_RPC, rhLogTargets, rhRpcTargets, rhRpcTimeout } from "./rh-server-rpc";
 
 export const ARC_CHAIN_ID = 5042;
 export const ARC_EXPLORER =
@@ -96,7 +96,7 @@ export function robinhoodTransport() {
   return fallback(
     [
       http(ROBINHOOD_PUBLIC_RPC, {
-        timeout: 8_000,
+        timeout: 25_000,
         retryCount: 0,
         fetchFn: (input, init) => rhFetch(robinhoodRpcUrl(), init),
       }),
@@ -134,13 +134,29 @@ function rhFailoverQueue(input: RequestInfo | URL) {
   );
 }
 
+function rhLogFailoverQueue(input: RequestInfo | URL) {
+  const first =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : String(input);
+  if (first.includes(RH_RPC_PROXY)) return [first];
+  return [first, ...rhLogTargets().filter((url) => url !== first)].filter(
+    (url, index, all) => Boolean(url) && all.indexOf(url) === index,
+  );
+}
+
 async function failoverFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const body = typeof init?.body === "string" ? init.body : "";
+  const logs = usesLogs(body);
+  const queue = logs ? rhLogFailoverQueue(input) : rhFailoverQueue(input);
   let lastError: Error | null = null;
-  for (const target of rhFailoverQueue(input)) {
+  for (const target of queue) {
     try {
       const response = await fetch(target, {
         ...init,
-        signal: init?.signal ?? AbortSignal.timeout(rhRpcTimeout(target)),
+        signal: init?.signal ?? AbortSignal.timeout(rhRpcTimeout(target, logs)),
       });
       const text = await response.text();
       if (response.status === 429 || response.status === 503 || deadRpc(text)) {
@@ -160,7 +176,7 @@ async function failoverFetch(input: RequestInfo | URL, init?: RequestInit) {
 }
 
 function deadRpc(body: string) {
-  return /rate limit|too many requests|could not complete this request|no answer was obtained|method not found|pruned history|limit exceeded/i.test(
+  return /rate limit|too many requests|could not complete this request|no answer was obtained|method not found|pruned history|limit exceeded|block range|free tier|invalid parameters/i.test(
     body,
   );
 }
