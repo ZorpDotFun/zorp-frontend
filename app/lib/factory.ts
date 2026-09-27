@@ -575,6 +575,7 @@ export async function loadRhPad(token: Address, factory: Address): Promise<RhPad
 }
 
 export async function resolveRhLaunchFactory(token: Address) {
+  if (isZorpToken(token)) return null;
   const cached = rhPadCache.get(token.toLowerCase());
   if (cached) return cached;
   const protocol = protocolOf();
@@ -1150,6 +1151,7 @@ function tokenFromRhPad(
 }
 
 async function readRhLaunch(address: Address): Promise<Token | null> {
+  if (isZorpToken(address)) return zorpLaunchToken();
   const resolved = await resolveRhLaunchFactory(address);
   if (!resolved) return isZorpToken(address) ? zorpLaunchToken() : null;
   const pairAsset = resolved.launch[2];

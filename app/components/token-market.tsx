@@ -10,6 +10,7 @@ import {
   type MarketTrade,
 } from "../lib/token-market";
 import { shortenAddress } from "../lib/tokens";
+import { isZorpToken } from "../lib/zorp-token";
 
 type Tab = "trades" | "holders";
 
@@ -31,8 +32,12 @@ export function TokenMarket({
   pairSymbol?: string;
 }) {
   const [tab, setTab] = useState<Tab>("trades");
-  const [trades, setTrades] = useState<MarketTrade[] | null>(null);
-  const [holders, setHolders] = useState<MarketHolder[] | null>(null);
+  const [trades, setTrades] = useState<MarketTrade[] | null>(() =>
+    isZorpToken(token) ? [] : null,
+  );
+  const [holders, setHolders] = useState<MarketHolder[] | null>(() =>
+    isZorpToken(token) ? [] : null,
+  );
   const tradesRef = useRef<MarketTrade[] | null>(null);
   tradesRef.current = trades;
 
@@ -62,6 +67,12 @@ export function TokenMarket({
 
     void loadTrades();
     void loadHolders();
+    const failFast = window.setTimeout(() => {
+      if (!cancelled) {
+        setTrades((prev) => prev ?? []);
+        setHolders((prev) => prev ?? []);
+      }
+    }, 4_000);
     const timer = window.setInterval(() => {
       void loadTrades();
       void loadHolders();
@@ -86,6 +97,7 @@ export function TokenMarket({
     window.addEventListener(MARKET_REFRESH, onRefresh);
     return () => {
       cancelled = true;
+      window.clearTimeout(failFast);
       window.clearInterval(timer);
       window.removeEventListener(MARKET_REFRESH, onRefresh);
     };

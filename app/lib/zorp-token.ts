@@ -97,7 +97,9 @@ export function pinZorp(tokens: Token[], market: ZorpMarket | null = null): Toke
 
 export async function readZorpDexMarket(): Promise<ZorpMarket | null> {
   try {
-    const response = await fetch(ZORP_DEX_PAIR_URL);
+    const response = await fetch(ZORP_DEX_PAIR_URL, {
+      signal: AbortSignal.timeout(8_000),
+    });
     if (!response.ok) return null;
     const body = (await response.json()) as {
       pair?: DexPairBody;

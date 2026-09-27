@@ -1,6 +1,7 @@
 import { erc20Abi, formatUnits, isAddress, parseAbiItem, type Address } from "viem";
-import { TOTAL_SUPPLY } from "./addresses";
+import { RH_ZORP_POOL_ID, TOTAL_SUPPLY } from "./addresses";
 import { getPublicClient, resolveRhLaunchFactory } from "./factory";
+import { isZorpToken } from "./zorp-token";
 import type { NetworkId } from "./active-network";
 import { getNetwork, protocolOf } from "./networks";
 import { launchPoolIdForToken, pairMark, usdPerTokenFromSqrt } from "./pool-price";
@@ -60,6 +61,9 @@ export async function fetchRecentTrades(
   lookback?: bigint,
   meta?: { poolId?: string; pairAsset?: string; creator?: string },
 ): Promise<MarketTrade[]> {
+  if (isZorpToken(token)) {
+    return fetchZorpPoolTrades(token, tokenIsCurrency0);
+  }
   const indexed = await fetchMarketIndex<MarketTrade[]>("trades", token, {
     tokenIsCurrency0,
     poolId: meta?.poolId,
@@ -160,6 +164,76 @@ export async function fetchRecentTrades(
   }
 
   return rows.sort((a, b) => b.time - a.time);
+}
+
+async function fetchZorpPoolTrades(
+  token: Address,
+  tokenIsCurrency0: boolean,
+): Promise<MarketTrade[]> {
+  return withTimeout(readZorpPoolTrades(tokenIsCurrency0), 5_000, []);
+}
+
+async function readZorpPoolTrades(tokenIsCurrency0: boolean): Promise<MarketTrade[]> {
+  try {
+    const mark = await pairMark();
+    const window = await lookbackWindow(12_000n);
+    const logs = (await collectContractLogs({
+      address: protocolOf().v4PoolManager,
+      event: swapEvent,
+      args: { id: RH_ZORP_POOL_ID },
+      fromBlock: window.fromBlock,
+      newestFirst: true,
+      limit: 40,
+      wide: true,
+    })) as {
+      args: {
+        amount0?: bigint;
+        amount1?: bigint;
+        sender?: Address;
+        sqrtPriceX96?: bigint;
+      };
+      blockNumber: bigint;
+      transactionHash: HexString;
+    }[];
+    const stamps = await blockTimes(logs.map((log) => log.blockNumber));
+    return logs
+      .map((log) => {
+        const amount0 = log.args.amount0 ?? 0n;
+        const amount1 = log.args.amount1 ?? 0n;
+        const tokenDelta = tokenIsCurrency0 ? amount0 : amount1;
+        const pairDelta = tokenIsCurrency0 ? amount1 : amount0;
+        return {
+          hash: log.transactionHash,
+          trader: log.args.sender ?? "",
+          buy: tokenDelta > 0n,
+          tokenAmount: Number(formatUnits(abs(tokenDelta), TOKEN_DECIMALS)),
+          usdcAmount: Number(formatUnits(abs(pairDelta), mark.decimals)) * mark.usd,
+          price: usdPerTokenFromSqrt(log.args.sqrtPriceX96 ?? 0n, tokenIsCurrency0),
+          time: (stamps.get(log.blockNumber) ?? Date.now() / 1000) * 1000,
+          venue: "Uniswap v4",
+        };
+      })
+      .filter((row) => row.tokenAmount > 0)
+      .sort((a, b) => b.time - a.time);
+  } catch {
+    return [];
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T) {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
 }
 
 async function resolveLaunch(
@@ -303,6 +377,7 @@ export async function fetchHolders(
   creator?: string,
   extra: string[] = [],
 ): Promise<MarketHolder[]> {
+  if (isZorpToken(token)) return [];
   const indexed = await fetchMarketIndex<MarketHolder[]>("holders", token, { creator });
   if (indexed && indexed.length > 0) return indexed;
 
@@ -502,7 +577,9 @@ async function fetchMarketIndex<T>(
   if (extra.pairAsset) params.set("pairAsset", extra.pairAsset);
   if (extra.tokenIsCurrency0) params.set("tokenIsCurrency0", "1");
   try {
-    const response = await fetch(`/api/market?${params}`);
+    const response = await fetch(`/api/market?${params}`, {
+      signal: AbortSignal.timeout(4_000),
+    });
     if (!response.ok) return null;
     const body = (await response.json()) as T | { error?: string };
     if (body && typeof body === "object" && "error" in body) return null;

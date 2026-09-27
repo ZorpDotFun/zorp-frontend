@@ -11,7 +11,13 @@ import { TokenTrade } from "../components/token-trade";
 import { TokenMarket } from "../components/token-market";
 import { TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
 import { explorerAddress, peekLaunch, readLaunch, readLaunchFees } from "../lib/factory";
-import { applyZorpMarket, isZorpToken, readZorpDexMarket, zorpLaunchToken } from "../lib/zorp-token";
+import {
+  applyZorpMarket,
+  isZorpToken,
+  readZorpDexMarket,
+  zorpLaunchToken,
+  ZORP_POOL_ID,
+} from "../lib/zorp-token";
 import { feeDestinationLine, feeModelLabel, type FeeConfig } from "../lib/fee-models";
 import {
   dexscreenerLaunchPairUrl,
@@ -69,9 +75,11 @@ export default function TokenPage({ params }: Route.ComponentProps) {
         : TARGET_FDV_USD,
   );
   const [points, setPoints] = useState<ChartPoint[]>(
-    cached
+    cached && !isZorpToken(params.address)
       ? [{ time: cached.launchedAt / 1000, value: cached.price || openingPriceUsd() }]
-      : [],
+      : cached && isZorpToken(params.address) && cached.price > 0
+        ? [{ time: cached.launchedAt / 1000, value: cached.price }]
+        : [],
   );
 
   useEffect(() => {
@@ -172,30 +180,40 @@ export default function TokenPage({ params }: Route.ComponentProps) {
       setPoints(merged);
     }
 
-    void readLaunch(params.address as Address)
-      .then((row) => {
-        if (cancelled) return;
-        if (!row) {
-          setError("Token is not a Zorp launch.");
-          return;
-        }
-        setToken(row);
-        setPoints((current) =>
-          current.length > 0
-            ? current
-            : [{ time: row.launchedAt / 1000, value: openingPriceUsd() }],
-        );
-        document.title = `${row.name} ($${row.ticker}) : Zorp`;
-        void load(row);
-        timer = window.setInterval(() => {
+    if (isZorpToken(params.address)) {
+      const stub = zorpLaunchToken();
+      setToken(stub);
+      document.title = `${stub.name} ($${stub.ticker}) : Zorp`;
+      void load(stub);
+      timer = window.setInterval(() => {
+        void load(stub);
+      }, 12_000);
+    } else {
+      void readLaunch(params.address as Address)
+        .then((row) => {
+          if (cancelled) return;
+          if (!row) {
+            setError("Token is not a Zorp launch.");
+            return;
+          }
+          setToken(row);
+          setPoints((current) =>
+            current.length > 0
+              ? current
+              : [{ time: row.launchedAt / 1000, value: openingPriceUsd() }],
+          );
+          document.title = `${row.name} ($${row.ticker}) : Zorp`;
           void load(row);
-        }, 12_000);
-      })
-      .catch((cause) => {
-        if (cancelled) return;
-        if (isAddress(params.address) && peekLaunch(params.address)) return;
-        setError(publicError(cause, "Could not load token."));
-      });
+          timer = window.setInterval(() => {
+            void load(row);
+          }, 12_000);
+        })
+        .catch((cause) => {
+          if (cancelled) return;
+          if (isAddress(params.address) && peekLaunch(params.address)) return;
+          setError(publicError(cause, "Could not load token."));
+        });
+    }
 
     function onTrade() {
       if (cancelled) return;
@@ -361,7 +379,7 @@ export default function TokenPage({ params }: Route.ComponentProps) {
           ticker={token.ticker}
           tokenIsCurrency0={token.tokenIsCurrency0}
           creator={token.creator}
-          poolId={token.poolId}
+          poolId={isZorpToken(token.address) ? ZORP_POOL_ID : token.poolId}
           pairAsset={token.pairAsset}
           pairSymbol={token.pair}
         />
@@ -496,6 +514,7 @@ function TokenFeeChip({ token }: { token: string }) {
   const [fees, setFees] = useState<FeeConfig | null>(null);
 
   useEffect(() => {
+    if (isZorpToken(token)) return;
     let cancelled = false;
     void readLaunchFees(token as Address).then((row) => {
       if (!cancelled) setFees(row);

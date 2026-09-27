@@ -92,7 +92,7 @@ export function TokenChart({
   }, [windowed, metric]);
 
   const last = points[points.length - 1]?.value ?? priceUsd;
-  const liveMcap = last > 0 ? last * TOTAL_SUPPLY : fdv;
+  const liveMcap = fdv > 0 ? fdv : last > 0 ? last * TOTAL_SUPPLY : 0;
   const candlesOn = metric === "candles";
 
   const chooseMetric = (next: Metric) => {

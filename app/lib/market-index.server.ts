@@ -28,7 +28,11 @@ export async function readIndexedHolders(input: MarketInput): Promise<MarketHold
     /* Blockscout is the instant backup */
   }
   if (!blockscoutSupported(input.chainId)) return [];
-  return readBlockscoutHolders(input);
+  try {
+    return await withDeadline(readBlockscoutHolders(input), 3_500);
+  } catch {
+    return [];
+  }
 }
 
 export async function readIndexedTrades(input: MarketInput): Promise<MarketTrade[]> {
@@ -39,7 +43,11 @@ export async function readIndexedTrades(input: MarketInput): Promise<MarketTrade
     /* Blockscout is the instant backup */
   }
   if (!blockscoutSupported(input.chainId)) return [];
-  return readBlockscoutTrades(input);
+  try {
+    return await withDeadline(readBlockscoutTrades(input), 3_500);
+  } catch {
+    return [];
+  }
 }
 
 function withDeadline<T>(promise: Promise<T>, ms: number) {
