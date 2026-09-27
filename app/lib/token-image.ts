@@ -25,7 +25,11 @@ export function tokenImageSrcs(raw?: string | null): string[] {
   if (!value) return [];
   const cid = tokenImageCid(value);
   const urls: string[] = [];
-  if (value.startsWith("http://") || value.startsWith("https://")) {
+  if (
+    value.startsWith("http://") ||
+    value.startsWith("https://") ||
+    value.startsWith("/")
+  ) {
     urls.push(value);
   }
   if (cid) {

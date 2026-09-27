@@ -27,6 +27,7 @@ import {
   type Token,
 } from "./tokens";
 import { publicError } from "./public-error";
+import { applyZorpMarket, isZorpToken, pinZorp, readZorpDexMarket } from "./zorp-token";
 
 const PRICE_POLL_MS = 12_000;
 const TAPE_POLL_MS = 8_000;
@@ -35,7 +36,7 @@ const KEEP_LOCAL_MS = 10 * 60_000;
 export function useLaunches(seed: Token[] = []) {
   const [networkId, setNetworkIdState] = useState(getNetworkId);
   const [tokens, setTokens] = useState<Token[]>(() =>
-    seed.length > 0 ? seed : readLaunchListCache(),
+    pinZorp(seed.length > 0 ? seed : readLaunchListCache()),
   );
   const [loading, setLoading] = useState(
     () => seed.length === 0 && readLaunchListCache().length === 0,
@@ -44,12 +45,6 @@ export function useLaunches(seed: Token[] = []) {
   const tokensRef = useRef<Token[]>([]);
   const refreshGen = useRef(0);
   tokensRef.current = tokens;
-
-  useEffect(() => {
-    if (seed.length === 0) return;
-    for (const row of seed) rememberLaunch(row);
-    writeLaunchListCache(seed);
-  }, [seed]);
 
   useEffect(() => {
     const sync = () => {
@@ -65,12 +60,24 @@ export function useLaunches(seed: Token[] = []) {
   }, []);
 
   const publish = useCallback((next: Token[]) => {
-    if (sameTape(next, tokensRef.current)) return;
-    for (const row of next) rememberLaunch(row);
-    writeLaunchListCache(next);
-    tokensRef.current = next;
-    setTokens(next);
+    const taped = pinZorp(next);
+    if (sameTape(taped, tokensRef.current)) return;
+    for (const row of taped) rememberLaunch(row);
+    writeLaunchListCache(taped);
+    tokensRef.current = taped;
+    setTokens(taped);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readZorpDexMarket().then((market) => {
+      if (cancelled || !market) return;
+      publish(pinZorp(seed.length > 0 ? seed : tokensRef.current, market));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [seed, publish]);
 
   const mergeIn = useCallback(
     (rows: Token[]) => {
@@ -239,22 +246,29 @@ function withKnownGraduation(token: Token): Token {
 }
 
 function holdTape(prior: Token | undefined, row: Token): Token {
-  const held = readExactMcap(row.address);
-  const mcap = held || prior?.mcap || row.mcap;
-  const fdv = held || prior?.fdv || row.fdv;
+  const held = row.bonded ? 0 : readExactMcap(row.address);
+  const live = row.bonded && row.mcap > 0;
+  const mcap = live ? row.mcap : held || prior?.mcap || row.mcap;
+  const fdv = live ? row.fdv : held || prior?.fdv || row.fdv;
   return {
     ...row,
     image: row.image || prior?.image || "",
-    ath: Math.max(row.ath ?? 0, prior?.ath ?? 0, held),
+    ath: Math.max(row.ath ?? 0, prior?.ath ?? 0, held, row.fdv, row.mcap),
     volume: Math.max(row.volume ?? 0, prior?.volume ?? 0),
     mcap,
     fdv,
-    price: held ? held / TOTAL_SUPPLY : prior?.price || row.price,
-    change24h: held ? changeFromOpen(held) : prior?.change24h ?? row.change24h,
+    price: live ? row.price : held ? held / TOTAL_SUPPLY : prior?.price || row.price,
+    change24h: live
+      ? row.change24h
+      : held
+        ? changeFromOpen(held)
+        : prior?.change24h ?? row.change24h,
     pair: row.pair && row.pair !== "WETH" ? row.pair : prior?.pair || row.pair,
     pairAsset: row.pairAsset || prior?.pairAsset,
     poolId: row.poolId || prior?.poolId,
     graduated: row.graduated || prior?.graduated,
+    bonded: row.bonded || prior?.bonded,
+    bondProgress: row.bondProgress ?? prior?.bondProgress,
   };
 }
 
@@ -266,16 +280,26 @@ function changeFromOpen(mcap: number) {
 async function withLiveMarkets(tokens: Token[]): Promise<Token[]> {
   if (tokens.length === 0) return tokens;
   try {
-    const lives = await readLiveUsdPrices(
-      tokens.map((token) => ({
-        address: token.address as Address,
-        tokenIsCurrency0: token.tokenIsCurrency0,
-        pairAsset: token.pairAsset,
-        poolFee: token.poolFee,
-        poolId: token.poolId,
-      })),
-    );
+    const [lives, zorpDex] = await Promise.all([
+      readLiveUsdPrices(
+        tokens
+          .filter((token) => !isZorpToken(token.address))
+          .map((token) => ({
+            address: token.address as Address,
+            tokenIsCurrency0: token.tokenIsCurrency0,
+            pairAsset: token.pairAsset,
+            poolFee: token.poolFee,
+            poolId: token.poolId,
+          })),
+      ),
+      tokens.some((token) => isZorpToken(token.address))
+        ? readZorpDexMarket()
+        : Promise.resolve(null),
+    ]);
     return tokens.map((token) => {
+      if (isZorpToken(token.address)) {
+        return applyZorpMarket(token, zorpDex);
+      }
       const livePrice = lives.get(token.address.toLowerCase()) ?? 0;
       if (!(livePrice > 0)) return token;
       const exact = noteExactMcap(token.address, livePrice * TOTAL_SUPPLY);

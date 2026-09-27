@@ -195,7 +195,7 @@ function Contracts() {
   const hook = NETWORKS.robinhood.protocol.hook;
   const live = NETWORKS.robinhood.protocol.deployed;
   const rows: [string, string, boolean][] = [
-    ["ZORP", RH_ZORP, true],
+    ["$ZORP", RH_ZORP, true],
     ["RhLaunchFactory", live ? factory : "-", live],
     [
       "RhLocker",
@@ -288,7 +288,7 @@ function Support() {
             ),
           },
           {
-            label: "ZORP CA",
+            label: "$ZORP",
             value: (
               <a
                 href={`${ROBINHOOD_EXPLORER}/address/${RH_ZORP}`}

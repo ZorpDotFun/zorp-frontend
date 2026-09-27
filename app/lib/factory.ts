@@ -15,6 +15,7 @@ import {
 } from "viem";
 import type { ConnectedWallet } from "@privy-io/react-auth";
 import { rhTokenFactories, TARGET_FDV_USD } from "./addresses";
+import { isZorpToken, pinZorp, readZorpDexMarket, zorpLaunchToken } from "./zorp-token";
 import { ARC_RPC_PRIMARY, ROBINHOOD_PUBLIC_RPC } from "./chains";
 import { PROTOCOL_SWAP_FEE_BPS, presetFees, validateFees, type FeeConfig } from "./fee-models";
 import { getNetworkId } from "./active-network";
@@ -1150,7 +1151,7 @@ function tokenFromRhPad(
 
 async function readRhLaunch(address: Address): Promise<Token | null> {
   const resolved = await resolveRhLaunchFactory(address);
-  if (!resolved) return null;
+  if (!resolved) return isZorpToken(address) ? zorpLaunchToken() : null;
   const pairAsset = resolved.launch[2];
   const [meta, pairName] = await Promise.all([
     readRhTokenMeta(address),
@@ -1429,7 +1430,8 @@ async function readRhLaunches(factories: Address[]): Promise<Token[]> {
     }
   }
   const rows = await readRhLaunchRows(addresses);
-  return rows.sort((a, b) => b.launchedAt - a.launchedAt);
+  const market = await readZorpDexMarket();
+  return pinZorp(rows.sort((a, b) => b.launchedAt - a.launchedAt), market);
 }
 
 export async function readLaunches(): Promise<Token[]> {

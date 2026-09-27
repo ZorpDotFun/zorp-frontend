@@ -20,9 +20,13 @@ export function TokenCard({
 }) {
   const [copied, setCopied] = useState(false);
   const mcap = tokenMarketCap(token);
-  const progress = tokenHasGraduated(token) ? 100 : graduationPct(mcap);
+  const bonded = token.bonded || badge === "BONDED";
+  const progress =
+    bonded || tokenHasGraduated(token) ? 100 : graduationPct(mcap);
   const up = token.change24h >= 0;
-  const label = badge ?? (tokenHasGraduated(token) ? "LIVE" : "HOT");
+  const label = bonded
+    ? "BONDED"
+    : (badge ?? (tokenHasGraduated(token) ? "LIVE" : "HOT"));
 
   async function copyAddress(event: MouseEvent) {
     event.preventDefault();
@@ -49,7 +53,7 @@ export function TokenCard({
           className="aspect-square w-full"
         />
         <span className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide text-yellowell uppercase backdrop-blur-sm">
-          <span aria-hidden>🔥</span>
+          {bonded ? null : <span aria-hidden>🔥</span>}
           {label}
         </span>
       </div>

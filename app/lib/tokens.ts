@@ -26,6 +26,8 @@ export type Token = {
   recentBuys: number;
   tokenIsCurrency0: boolean;
   graduated?: boolean;
+  bonded?: boolean;
+  bondProgress?: number;
 };
 
 export function formatUsd(value: number): string {

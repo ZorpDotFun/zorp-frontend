@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { type Token } from "../lib/tokens";
+import { pinZorp } from "../lib/zorp-token";
 import { TokenCard } from "./token-card";
 
 type SortKey =
@@ -54,7 +55,7 @@ export function ExploreSection({
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [openSort]);
 
-  const launched = tokens;
+  const launched = pinZorp(tokens);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -95,6 +96,7 @@ export function ExploreSection({
     const used = effectiveSort;
 
     rows = [...rows].sort((a, b) => {
+      if (a.bonded !== b.bonded) return a.bonded ? -1 : 1;
       switch (used) {
         case "oldest":
           return a.launchedAt - b.launchedAt;
@@ -282,7 +284,11 @@ export function ExploreSection({
       ) : (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           {filtered.map((token) => (
-            <TokenCard key={token.id} token={token} />
+            <TokenCard
+              key={token.id}
+              token={token}
+              badge={token.bonded ? "BONDED" : undefined}
+            />
           ))}
         </div>
       )}

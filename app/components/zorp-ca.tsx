@@ -29,7 +29,7 @@ export function ZorpCa({
     <div
       className={`inline-flex min-w-0 items-center gap-2 text-[13px] text-muted ${className}`}
     >
-      <span className="shrink-0 font-medium text-ink">CA</span>
+      <span className="shrink-0 font-medium text-ink">$ZORP</span>
       <Link
         to={`/token/${RH_ZORP}`}
         className="min-w-0 truncate font-mono text-[12px] hover:text-ink"

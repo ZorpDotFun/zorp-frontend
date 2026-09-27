@@ -264,10 +264,16 @@ export function preferOfficialUsd(
 export async function readLiveUsdPrice(
   token: Address,
   tokenIsCurrency0: boolean,
-  pair?: { pairAsset?: string; poolFee?: number },
+  pair?: { pairAsset?: string; poolFee?: number; poolId?: string },
 ) {
   const prices = await readLiveUsdPrices([
-    { address: token, tokenIsCurrency0, pairAsset: pair?.pairAsset, poolFee: pair?.poolFee },
+    {
+      address: token,
+      tokenIsCurrency0,
+      pairAsset: pair?.pairAsset,
+      poolFee: pair?.poolFee,
+      poolId: pair?.poolId,
+    },
   ]);
   return prices.get(token.toLowerCase()) ?? null;
 }

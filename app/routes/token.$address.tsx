@@ -11,6 +11,7 @@ import { TokenTrade } from "../components/token-trade";
 import { TokenMarket } from "../components/token-market";
 import { TARGET_FDV_USD, TOTAL_SUPPLY } from "../lib/addresses";
 import { explorerAddress, peekLaunch, readLaunch, readLaunchFees } from "../lib/factory";
+import { applyZorpMarket, isZorpToken, readZorpDexMarket, zorpLaunchToken } from "../lib/zorp-token";
 import { feeDestinationLine, feeModelLabel, type FeeConfig } from "../lib/fee-models";
 import {
   dexscreenerLaunchPairUrl,
@@ -38,6 +39,12 @@ import { publicError } from "../lib/public-error";
 import { requestTokenVerification } from "../lib/verify-launch-token";
 
 export function meta({ params }: Route.MetaArgs) {
+  if (isZorpToken(params.address)) {
+    return [
+      { title: "Zorp Fun ($ZORP) : Zorp" },
+      { name: "description", content: "Official $ZORP on Robinhood." },
+    ];
+  }
   return [
     { title: `Token ${params.address.slice(0, 8)} : Zorp` },
     { name: "description", content: "Live Zorp launch on Robinhood." },
@@ -46,11 +53,21 @@ export function meta({ params }: Route.MetaArgs) {
 
 export default function TokenPage({ params }: Route.ComponentProps) {
   const { network } = useNetwork();
-  const cached = isAddress(params.address) ? peekLaunch(params.address) : undefined;
+  const cached = isAddress(params.address)
+    ? peekLaunch(params.address) ?? (isZorpToken(params.address) ? zorpLaunchToken() : undefined)
+    : undefined;
   const [token, setToken] = useState<Token | null>(cached ?? null);
   const [error, setError] = useState<string | null>(null);
-  const [priceUsd, setPriceUsd] = useState(cached?.price ?? openingPriceUsd());
-  const [fdv, setFdv] = useState(cached?.fdv && cached.fdv > 0 ? cached.fdv : TARGET_FDV_USD);
+  const [priceUsd, setPriceUsd] = useState(
+    cached?.price && cached.price > 0 ? cached.price : 0,
+  );
+  const [fdv, setFdv] = useState(
+    cached?.fdv && cached.fdv > 0 && cached.fdv !== TARGET_FDV_USD
+      ? cached.fdv
+      : isZorpToken(params.address)
+        ? 0
+        : TARGET_FDV_USD,
+  );
   const [points, setPoints] = useState<ChartPoint[]>(
     cached
       ? [{ time: cached.launchedAt / 1000, value: cached.price || openingPriceUsd() }]
@@ -76,6 +93,22 @@ export default function TokenPage({ params }: Route.ComponentProps) {
     let timer = 0;
 
     async function load(row: Token) {
+      if (isZorpToken(row.address)) {
+        const market = await readZorpDexMarket();
+        if (cancelled || !market) return;
+        setToken((current) =>
+          current ? applyZorpMarket(current, market) : current,
+        );
+        setPriceUsd(market.priceUsd);
+        setFdv(market.fdv);
+        setPoints((current) =>
+          mergePoints([
+            ...current,
+            { time: Date.now() / 1000, value: market.priceUsd },
+          ]),
+        );
+        return;
+      }
       const address = row.address as Address;
       const poolId = launchPoolIdForToken(row);
       const live = await readLiveUsdPrice(address, row.tokenIsCurrency0, row);
@@ -115,7 +148,10 @@ export default function TokenPage({ params }: Route.ComponentProps) {
 
       const latest = preferOfficialUsd(live, dex.priceUsd, row.price);
       if (!(latest > 0)) return;
-      const nextFdv = latest * TOTAL_SUPPLY;
+      const nextFdv =
+        isZorpToken(row.address) && dex.fdv && dex.fdv > 0
+          ? dex.fdv
+          : latest * TOTAL_SUPPLY;
       const printPeak =
         prints.reduce((best, point) => Math.max(best, point.value), 0) *
         TOTAL_SUPPLY;
@@ -201,7 +237,8 @@ export default function TokenPage({ params }: Route.ComponentProps) {
     launchPoolIdForToken(token),
   );
   const hasSocials = Boolean(token.twitter || token.telegram || token.website);
-  const filled = tokenHasGraduated({ ...token, fdv, mcap: fdv });
+  const filled =
+    token.bonded || tokenHasGraduated({ ...token, fdv, mcap: fdv });
   const bondPct = filled ? 100 : graduationPct(fdv);
 
   return (
@@ -214,14 +251,16 @@ export default function TokenPage({ params }: Route.ComponentProps) {
         <span className="truncate text-ink">{token.name}</span>
       </nav>
 
-      <div className="mt-6 empty:mt-0 empty:hidden">
-        <CreatorFees
-          token={token.address}
-          creator={token.creator}
-          pair={token.pair}
-          pairAsset={token.pairAsset}
-        />
-      </div>
+      {token.bonded || !token.creator ? null : (
+        <div className="mt-6 empty:mt-0 empty:hidden">
+          <CreatorFees
+            token={token.address}
+            creator={token.creator}
+            pair={token.pair}
+            pairAsset={token.pairAsset}
+          />
+        </div>
+      )}
 
       <header className="mt-6 flex flex-wrap items-start justify-between gap-4 sm:gap-6">
         <div className="flex min-w-0 items-start gap-3.5">
@@ -237,6 +276,11 @@ export default function TokenPage({ params }: Route.ComponentProps) {
                 {token.name}
               </h1>
               <span className="size-1.5 shrink-0 rounded-full bg-yellowell" />
+              {token.bonded ? (
+                <span className="rounded-md bg-black/70 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-yellowell uppercase">
+                  Bonded
+                </span>
+              ) : null}
             </div>
             <p className="mt-0.5 text-[13px] font-medium text-muted">
               ${token.ticker}/{token.pair}
@@ -257,18 +301,20 @@ export default function TokenPage({ params }: Route.ComponentProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-3 pt-1">
-          <a
-            href={explorerAddress(token.creator)}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 text-[13px] text-muted hover:text-ink"
-          >
-            <span>Created by</span>
-            <ProfileAvatar address={token.creator} className="size-5" />
-            <span className="font-mono text-ink">
-              {shortenAddress(token.creator)}
-            </span>
-          </a>
+          {isAddress(token.creator) ? (
+            <a
+              href={explorerAddress(token.creator)}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-2 text-[13px] text-muted hover:text-ink"
+            >
+              <span>Created by</span>
+              <ProfileAvatar address={token.creator} className="size-5" />
+              <span className="font-mono text-ink">
+                {shortenAddress(token.creator)}
+              </span>
+            </a>
+          ) : null}
           <HeaderMenu address={token.address} dexUrl={dexUrl} />
         </div>
       </header>

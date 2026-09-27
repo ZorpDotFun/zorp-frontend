@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { useMemo } from "react";
 import { type Token } from "../lib/tokens";
+import { isZorpToken, pinZorp } from "../lib/zorp-token";
 import { TokenCard } from "./token-card";
 
 function trendScore(token: Token) {
@@ -21,18 +22,19 @@ export function TrendingTokens({
   loading: boolean;
   error?: string | null;
 }) {
-  const trending = useMemo(
-    () =>
-      [...tokens]
-        .sort((a, b) => {
-          const delta = trendScore(b) - trendScore(a);
-          if (delta !== 0) return delta;
-          if (a.launchedAt !== b.launchedAt) return b.launchedAt - a.launchedAt;
-          return a.address.localeCompare(b.address);
-        })
-        .slice(0, 10),
-    [tokens],
-  );
+  const trending = useMemo(() => {
+    const zorp = tokens.find((token) => isZorpToken(token.address));
+    const ranked = [...tokens]
+      .filter((token) => !isZorpToken(token.address))
+      .sort((a, b) => {
+        const delta = trendScore(b) - trendScore(a);
+        if (delta !== 0) return delta;
+        if (a.launchedAt !== b.launchedAt) return b.launchedAt - a.launchedAt;
+        return a.address.localeCompare(b.address);
+      })
+      .slice(0, 9);
+    return pinZorp(zorp ? [zorp, ...ranked] : ranked).slice(0, 10);
+  }, [tokens]);
 
   return (
     <section id="explore" className="scroll-mt-24 px-3 sm:px-6">
@@ -76,7 +78,13 @@ export function TrendingTokens({
                 <div key={token.address} className={index >= 8 ? "hidden xl:block" : undefined}>
                   <TokenCard
                     token={token}
-                    badge={index === 0 ? "HOTTEST" : "HOT"}
+                    badge={
+                      token.bonded
+                        ? "BONDED"
+                        : index === 1
+                          ? "HOTTEST"
+                          : "HOT"
+                    }
                   />
                 </div>
               ))}
