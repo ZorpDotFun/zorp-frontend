@@ -1,4 +1,4 @@
-import { TOTAL_SUPPLY } from "./addresses";
+import { RH_ZORP, RH_ZORP_POOL_ID, TOTAL_SUPPLY } from "./addresses";
 import { getNetwork } from "./networks";
 
 export type ChartPoint = { time: number; value: number };
@@ -161,7 +161,12 @@ function pickDexPair(pairs: DexPair[], officialPoolId?: string): DexMarket | nul
   const ranked = [...chainPairs].sort(
     (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
   );
-  const official = officialPoolId?.toLowerCase();
+  const official = (
+    officialPoolId ||
+    (ranked.some((item) => item.baseToken?.address?.toLowerCase() === RH_ZORP.toLowerCase())
+      ? RH_ZORP_POOL_ID
+      : undefined)
+  )?.toLowerCase();
   const pair =
     (official
       ? ranked.find((item) => item.pairAddress?.toLowerCase() === official)

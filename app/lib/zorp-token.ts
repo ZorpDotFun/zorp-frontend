@@ -1,5 +1,5 @@
 import { zeroAddress, type Address } from "viem";
-import { RH_ZORP, TARGET_FDV_USD, TOTAL_SUPPLY } from "./addresses";
+import { RH_ZORP, RH_ZORP_POOL_ID, TARGET_FDV_USD, TOTAL_SUPPLY } from "./addresses";
 import type { Token } from "./tokens";
 
 export type ZorpMarket = {
@@ -10,8 +10,9 @@ export type ZorpMarket = {
   bondProgress?: number;
 };
 
-const PONS_TOKEN_URL =
-  "https://api.ponsfamily.com/v1/tokens/0xEe28144F417181fCdc7283bf48eD0fb68944F332";
+export const ZORP_POOL_ID = RH_ZORP_POOL_ID;
+export const ZORP_DEXSCREENER_URL = `https://dexscreener.com/robinhood/${RH_ZORP_POOL_ID}`;
+const ZORP_DEX_PAIR_URL = `https://api.dexscreener.com/latest/dex/pairs/robinhood/${RH_ZORP_POOL_ID}`;
 export const ZORP_IMAGE = "/assets/logos/z-3d.png";
 export const ZORP_LAUNCHED_AT = 1_790_512_178_000;
 
@@ -44,6 +45,7 @@ export function zorpLaunchToken(overrides: Partial<Token> = {}): Token {
     launchedAt: ZORP_LAUNCHED_AT,
     pair: "ETH",
     pairAsset: zeroAddress,
+    poolId: RH_ZORP_POOL_ID,
     poolFee: 0,
     hue: hueFromAddress(RH_ZORP),
     recentBuys: 0,
@@ -56,6 +58,7 @@ export function zorpLaunchToken(overrides: Partial<Token> = {}): Token {
     ticker: overrides.ticker || "ZORP",
     pair: overrides.pair || "ETH",
     pairAsset: (overrides.pairAsset as Address | undefined) || zeroAddress,
+    poolId: overrides.poolId || RH_ZORP_POOL_ID,
     image: overrides.image || ZORP_IMAGE,
     bonded: true,
     graduated: overrides.graduated ?? false,
@@ -94,36 +97,41 @@ export function pinZorp(tokens: Token[], market: ZorpMarket | null = null): Toke
 
 export async function readZorpDexMarket(): Promise<ZorpMarket | null> {
   try {
-    const response = await fetch(PONS_TOKEN_URL);
+    const response = await fetch(ZORP_DEX_PAIR_URL);
     if (!response.ok) return null;
     const body = (await response.json()) as {
-      last_price?: string;
-      quote_price_usd?: string;
-      progress_bps?: number;
-      buy_count?: number;
-      sell_count?: number;
-      curve_quote_in?: string;
-      curve_quote_out?: string;
+      pair?: DexPairBody;
+      pairs?: DexPairBody[];
     };
-    const lastPrice = Number(body.last_price);
-    const ethUsd = Number(body.quote_price_usd);
-    if (!(lastPrice > 0) || !(ethUsd > 0)) return null;
-    const priceUsd = (lastPrice / 1e18) * ethUsd;
+    const pair = body.pair ?? body.pairs?.[0];
+    if (!pair || pair.pairAddress?.toLowerCase() !== RH_ZORP_POOL_ID.toLowerCase()) {
+      return null;
+    }
+    const priceUsd = Number(pair.priceUsd);
     if (!(priceUsd > 0) || !Number.isFinite(priceUsd)) return null;
-    const quoteIn = Number(body.curve_quote_in) || 0;
-    const quoteOut = Number(body.curve_quote_out) || 0;
-    const volumeEth = Math.max(0, (quoteIn + quoteOut) / 1e18);
+    const fdv =
+      pair.marketCap && pair.marketCap > 0
+        ? pair.marketCap
+        : pair.fdv && pair.fdv > 0
+          ? pair.fdv
+          : priceUsd * TOTAL_SUPPLY;
     return {
       priceUsd,
-      fdv: priceUsd * TOTAL_SUPPLY,
-      change24h: 0,
-      volume: volumeEth * ethUsd,
-      bondProgress:
-        typeof body.progress_bps === "number"
-          ? Math.min(100, body.progress_bps / 100)
-          : undefined,
+      fdv,
+      change24h: Number(pair.priceChange?.h24) || 0,
+      volume: Number(pair.volume?.h24) || 0,
+      bondProgress: 100,
     };
   } catch {
     return null;
   }
 }
+
+type DexPairBody = {
+  pairAddress?: string;
+  priceUsd?: string;
+  fdv?: number;
+  marketCap?: number;
+  volume?: { h24?: number };
+  priceChange?: { h24?: number };
+};

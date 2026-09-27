@@ -1,5 +1,5 @@
 import { encodeAbiParameters, erc20Abi, keccak256, parseAbiItem, type Address } from "viem";
-import { GRADUATION_MC_USD, LAUNCH_HOOK, TOTAL_SUPPLY, USDC } from "./addresses";
+import { GRADUATION_MC_USD, LAUNCH_HOOK, RH_ZORP, RH_ZORP_POOL_ID, TOTAL_SUPPLY, USDC } from "./addresses";
 import { getPublicClient, rhLaunchFactoryAbi } from "./factory";
 import { getNetwork, protocolOf } from "./networks";
 import { isNativeEth, RH_USDG } from "./quote-tokens";
@@ -56,6 +56,9 @@ export function dexscreenerLaunchPairUrl(
   token: Address | string,
   poolId?: string,
 ) {
+  if (String(token).toLowerCase() === RH_ZORP.toLowerCase()) {
+    return `https://dexscreener.com/robinhood/${poolId || RH_ZORP_POOL_ID}`;
+  }
   return `https://dexscreener.com/${getNetwork().dexSlug}/${poolId ?? launchPoolId(token as Address)}`;
 }
 

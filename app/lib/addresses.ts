@@ -54,6 +54,9 @@ export const RH_REVENUE_TREASURY = addr(
 );
 /** Official ZORP token on Robinhood 4663. */
 export const RH_ZORP = addr("0xEe28144F417181fCdc7283bf48eD0fb68944F332");
+/** Bonded Uniswap v4 pool on Dexscreener. */
+export const RH_ZORP_POOL_ID =
+  "0x22557a03bbdcd2f591798a56eb5277a6f4bc596585e531c7cc26a38559ecdcfa";
 
 /** Earlier RH pads. Create always uses `RH_LAUNCH_FACTORY`; reads still find these. */
 export const RH_PREVIOUS_FACTORIES = [
